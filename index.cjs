@@ -106,6 +106,30 @@ async function fillPdf(srcPath, outPath, fields = {}) {
   return { outPath, filled, size: outBytes.length };
 }
 
+/* ===== Filename helpers (NEW) ===== */
+function safeName(s) {
+  return String(s || '')
+    .replace(/[\\/:*?"<>|#%]/g, '') // illegal chars for Drive/OS
+    .replace(/\s+/g, '')            // optional: strip spaces
+    .trim();
+}
+function formatStampYYYY_MM_DD(anyTs) {
+  let d = anyTs ? new Date(anyTs) : new Date();
+  if (isNaN(d)) d = new Date(); // fallback if parse fails
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}_${mm}_${dd}`;
+}
+function buildOutNameFromFields(fields = {}) {
+  const customer = safeName(fields.CustomerID || fields['CustomerID'] || '');
+  const fullK    = safeName(fields['FullName(Kanji)'] || fields['FullName (Kanji)'] || '');
+  const school   = safeName(fields.School || fields['School'] || '');
+  const stamp    = formatStampYYYY_MM_DD(fields.Timestamp || fields['Timestamp']);
+  const base     = `${customer}_${fullK}_${school}_${stamp}_申込書`;
+  return `${base}.pdf`;
+}
+
 // ---- HTTP server ----
 const app = express();
 app.use(cors());
@@ -163,8 +187,10 @@ app.post('/fill', async (req, res) => {
     const tmpTemplate = path.join(TMP, `template_${templateFileId}.pdf`);
     await downloadDriveFile(templateFileId, tmpTemplate);
 
-    const outName = `filled_${Date.now()}.pdf`;
+    // NEW: custom output name from incoming fields
+    const outName = buildOutNameFromFields(fields || {});
     const outPath = path.join(TMP, outName);
+
     const result = await fillPdf(tmpTemplate, outPath, fields || {});
     log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
 
