@@ -14,8 +14,8 @@ const PORT = process.env.PORT || 8080;
 const TMP  = path.join(os.tmpdir(), 'pdf-filler');
 ensureDir(TMP);
 
-// === Put your Drive folder ID (My Drive or Shared Drive) ===
-const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '1MbBZhg5AfJlHd8Wl1tMB2ekIsPU7QQ-F';
+// === Default fallback folder (used ONLY when no folderId is provided in request) ===
+const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
 function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
@@ -24,7 +24,6 @@ function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true
 function getDriveClient() {
   // Option A: GOOGLE_CREDENTIALS_JSON (paste JSON into Render env var)
   // Option B: GOOGLE_APPLICATION_CREDENTIALS (path to a mounted JSON file)
-  /** @type {object|null} */
   let credentials = null;
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     try { credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); }
@@ -32,7 +31,7 @@ function getDriveClient() {
   }
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/drive'],
-    ...(credentials ? { credentials } : {}) // falls back to ADC / GOOGLE_APPLICATION_CREDENTIALS
+    ...(credentials ? { credentials } : {}) // fallback to ADC / GOOGLE_APPLICATION_CREDENTIALS
   });
   return google.drive({ version: 'v3', auth });
 }
@@ -52,9 +51,19 @@ async function downloadDriveFile(fileId, destPath) {
   return destPath;
 }
 
-async function uploadToDrive(localPath, name) {
+/**
+ * Upload localPath to Drive.
+ * - If parentId is provided (from request), it is used.
+ * - Else if OUTPUT_FOLDER_ID env is set, it is used.
+ * - Else it uploads to My Drive root of the service account.
+ */
+async function uploadToDrive(localPath, name, parentId) {
   const drive = getDriveClient();
-  const fileMetadata = { name, parents: OUTPUT_FOLDER_ID ? [OUTPUT_FOLDER_ID] : undefined };
+  const parents =
+    parentId ? [parentId] :
+    (OUTPUT_FOLDER_ID ? [OUTPUT_FOLDER_ID] : undefined);
+
+  const fileMetadata = { name, parents };
   const media = { mimeType: 'application/pdf', body: fs.createReadStream(localPath) };
   const res = await drive.files.create({
     requestBody: fileMetadata,
@@ -95,7 +104,7 @@ async function fillPdf(srcPath, outPath, fields = {}) {
           try { f.select(val); filled++; } catch (_) {}
         }
       } catch (_) {
-        // field not found — ignore
+        // field not found — ignore missing field
       }
     }
     try { form.updateFieldAppearances(); } catch (_) {}
@@ -104,30 +113,6 @@ async function fillPdf(srcPath, outPath, fields = {}) {
   const outBytes = await pdfDoc.save();
   fs.writeFileSync(outPath, outBytes);
   return { outPath, filled, size: outBytes.length };
-}
-
-/* ===== Filename helpers (NEW) ===== */
-function safeName(s) {
-  return String(s || '')
-    .replace(/[\\/:*?"<>|#%]/g, '') // illegal chars for Drive/OS
-    .replace(/\s+/g, '')            // optional: strip spaces
-    .trim();
-}
-function formatStampYYYY_MM_DD(anyTs) {
-  let d = anyTs ? new Date(anyTs) : new Date();
-  if (isNaN(d)) d = new Date(); // fallback if parse fails
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yyyy}_${mm}_${dd}`;
-}
-function buildOutNameFromFields(fields = {}) {
-  const customer = safeName(fields.CustomerID || fields['CustomerID'] || '');
-  const fullK    = safeName(fields['FullName(Kanji)'] || fields['FullName (Kanji)'] || '');
-  const school   = safeName(fields.School || fields['School'] || '');
-  const stamp    = formatStampYYYY_MM_DD(fields.Timestamp || fields['Timestamp']);
-  const base     = `${customer}_${fullK}_${school}_${stamp}_申込書`;
-  return `${base}.pdf`;
 }
 
 // ---- HTTP server ----
@@ -175,10 +160,10 @@ app.get('/fields', async (req, res) => {
 });
 
 // POST /fill
-// body: { templateFileId: "<Drive file id>", fields: { "FullName(Roman)":"Jane Doe", ... } }
+// body: { templateFileId: "<Drive file id>", fields: {...}, outputName?: "baseName", folderId?: "<Drive folder id>" }
 app.post('/fill', async (req, res) => {
   try {
-    const { templateFileId, fields } = req.body || {};
+    const { templateFileId, fields, outputName, folderId } = req.body || {};
     if (!templateFileId) {
       return res.status(400).json({ error: 'templateFileId is required' });
     }
@@ -187,14 +172,14 @@ app.post('/fill', async (req, res) => {
     const tmpTemplate = path.join(TMP, `template_${templateFileId}.pdf`);
     await downloadDriveFile(templateFileId, tmpTemplate);
 
-    // NEW: custom output name from incoming fields
-    const outName = buildOutNameFromFields(fields || {});
+    const base = (outputName && String(outputName).trim()) || `filled_${Date.now()}`;
+    const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
     const outPath = path.join(TMP, outName);
 
     const result = await fillPdf(tmpTemplate, outPath, fields || {});
     log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
 
-    const uploaded = await uploadToDrive(result.outPath, outName);
+    const uploaded = await uploadToDrive(result.outPath, outName, folderId);
     log('Uploaded to Drive:', uploaded);
 
     res.json({
@@ -210,7 +195,7 @@ app.post('/fill', async (req, res) => {
 
 app.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
-  log(`OUTPUT_FOLDER_ID: ${OUTPUT_FOLDER_ID || '(none set)'}`);
+  log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON' :
                (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
 });
