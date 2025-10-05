@@ -1,6 +1,5 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
-// Requires deps: express, cors, pdf-lib, googleapis, iconv-lite
-// Optional: system pdftk (for XFDF mode with Shift_JIS etc.)
+// Requires deps: express, cors, pdf-lib, googleapis
 // Render-compatible: uses process.env.PORT and os.tmpdir()
 
 const fs = require('fs');
@@ -10,8 +9,6 @@ const express = require('express');
 const cors = require('cors');
 const { PDFDocument } = require('pdf-lib');
 const { google } = require('googleapis');
-const iconv = require('iconv-lite');                // ★ 追加：文字コード変換
-const { spawn } = require('child_process');         // ★ 追加：pdftk 実行
 
 const PORT = process.env.PORT || 8080;
 const TMP  = path.join(os.tmpdir(), 'pdf-filler');
@@ -20,20 +17,13 @@ ensureDir(TMP);
 // === Default fallback folder (used ONLY when no folderId is provided in request) ===
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
-// === Fill mode / Encoding (ENV) ===
-const FILL_MODE = (process.env.FILL_MODE || 'pdf-lib').toLowerCase();     // 'pdf-lib' | 'xfdf'
-const XFDF_ENCODING = (process.env.XFDF_ENCODING || 'UTF-8');             // 'UTF-8' | 'Shift_JIS' | etc.
-
 function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 
-log('////////////////////////////////////////////////////////////');
-log('PDF filler starting…');
-log('TMP dir:', TMP);
-log('OUTPUT_FOLDER_ID (fallback):', OUTPUT_FOLDER_ID || '(none)');
-log('Using fill mode:', FILL_MODE.toUpperCase());
-log('Encoding:', XFDF_ENCODING);
-log('////////////////////////////////////////////////////////////');
+// --- JP font path (env overrides repo file) ---
+const FONT_TTF_PATH =
+  process.env.FONT_TTF_PATH ||
+  path.join(__dirname, 'fonts', 'NotoSansJP-Regular.ttf');
 
 // ---- Google Drive client (supports Shared Drives) ----
 function getDriveClient() {
@@ -89,10 +79,24 @@ async function uploadToDrive(localPath, name, parentId) {
   return res.data;
 }
 
-// ---- PDF fill (pdf-lib path: handles text / checkbox / radio / dropdown) ----
+// ---- PDF fill (pdf-lib only; embed JP font and redraw appearances) ----
 async function fillPdf(srcPath, outPath, fields = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
+
+  // Try to embed JP font (subset)
+  let jpFont = null;
+  try {
+    if (fs.existsSync(FONT_TTF_PATH)) {
+      const fontBytes = fs.readFileSync(FONT_TTF_PATH);
+      jpFont = await pdfDoc.embedFont(fontBytes, { subset: true });
+      log('Embedded font:', FONT_TTF_PATH);
+    } else {
+      log('Font not found (skip embed):', FONT_TTF_PATH);
+    }
+  } catch (e) {
+    log('Font embed failed (continue without):', e && e.message);
+  }
 
   let filled = 0;
   let form = null;
@@ -103,100 +107,43 @@ async function fillPdf(srcPath, outPath, fields = {}) {
       try {
         const f = form.getField(String(key));
         const typeName = (f && f.constructor && f.constructor.name) || '';
+
         const val = rawVal == null ? '' : String(rawVal);
 
         if (typeName.includes('Text')) {
+          // Text fields: set value (JP text will render if font embedded)
           f.setText(val);
           filled++;
         } else if (typeName.includes('Check')) {
+          // Checkboxes expect boolean-ish
           const on = val.toLowerCase();
           if (on === 'true' || on === 'yes' || on === '1' || on === 'on') f.check();
           else f.uncheck();
           filled++;
         } else if (typeName.includes('Radio')) {
+          // Radios expect exact export value
           try { f.select(val); filled++; } catch (_) {}
         } else if (typeName.includes('Dropdown')) {
+          // Dropdowns expect exact export value
           try { f.select(val); filled++; } catch (_) {}
         }
       } catch (_) {
-        // field not found — ignore missing field
+        // Missing field: ignore
       }
     }
-    try { form.updateFieldAppearances(); } catch (_) {}
+
+    // Redraw appearances with JP font if available
+    try {
+      if (jpFont) form.updateFieldAppearances(jpFont);
+      else form.updateFieldAppearances();
+    } catch (e) {
+      log('updateFieldAppearances error:', e && e.message);
+    }
   }
 
   const outBytes = await pdfDoc.save();
   fs.writeFileSync(outPath, outBytes);
   return { outPath, filled, size: outBytes.length };
-}
-
-// ---- PDF fill (pdftk + XFDF path) ----
-async function fillPdfWithPdftk(templatePath, outPath, fields = {}) {
-  const xfdfBuf = buildXfdfBuffer(fields, XFDF_ENCODING);
-  const tmpBase = path.basename(outPath, '.pdf');
-  const tmpXfdf = path.join(TMP, `${tmpBase}.xfdf`);
-
-  // Write XFDF (binary if Shift_JIS)
-  fs.writeFileSync(tmpXfdf, xfdfBuf);
-
-  const pdfTk = 'pdftk';
-  log('pdftk filling...', {
-    templatePdfPath: templatePath,
-    xfdfPath: tmpXfdf,
-    outPdfPath: outPath,
-    PDFTK_PATH: pdfTk
-  });
-
-  return new Promise((resolve, reject) => {
-    const args = [templatePath, 'fill_form', tmpXfdf, 'output', outPath, 'flatten'];
-    const ps = spawn(pdfTk, args);
-    let stderr = '';
-    ps.stderr && ps.stderr.on('data', (d) => { stderr += d.toString(); });
-    ps.on('error', (e) => reject(e));
-    ps.on('close', (code) => {
-      if (code === 0) {
-        resolve({ outPath, filled: Object.keys(fields).length });
-      } else {
-        const err = new Error(`pdftk exited with code ${code}: ${stderr}`);
-        reject(err);
-      }
-    });
-  });
-}
-
-/**
- * Build XFDF as Buffer with desired encoding.
- * When encoding is 'Shift_JIS', returns SJIS-encoded Buffer via iconv-lite.
- * Otherwise returns UTF-8 Buffer.
- */
-function buildXfdfBuffer(fields, encoding = 'UTF-8') {
-  const enc = String(encoding || 'UTF-8');
-  let xml = `<?xml version="1.0" encoding="${enc}"?>\n`;
-  xml += '<xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve">\n';
-  xml += '  <fields>\n';
-  for (const [key, val] of Object.entries(fields || {})) {
-    const v = (val == null) ? '' : String(val);
-    xml += `    <field name="${escapeXmlAttr(key)}"><value>${escapeXmlText(v)}</value></field>\n`;
-  }
-  xml += '  </fields>\n';
-  xml += '</xfdf>\n';
-
-  if (/shift[_-]?jis/i.test(enc) || /sjis/i.test(enc)) {
-    return iconv.encode(xml, 'Shift_JIS');
-  }
-  return Buffer.from(xml, 'utf8');
-}
-
-function escapeXmlAttr(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-function escapeXmlText(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 // ---- HTTP server ----
@@ -213,8 +160,7 @@ app.get('/health', (req, res) => {
     ok: true,
     tmpDir: TMP,
     hasOUTPUT_FOLDER_ID: !!OUTPUT_FOLDER_ID,
-    fillMode: FILL_MODE,
-    xfdfEncoding: XFDF_ENCODING,
+    fontPath: FONT_TTF_PATH,
     credMode: process.env.GOOGLE_CREDENTIALS_JSON
       ? 'env-json'
       : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown')
@@ -254,13 +200,6 @@ app.post('/fill', async (req, res) => {
       return res.status(400).json({ error: 'templateFileId is required' });
     }
 
-    log('Fill request:', {
-      fillMode: FILL_MODE,
-      xfdfEncoding: XFDF_ENCODING,
-      folderId: folderId || '(none)'
-    });
-
-    // 1) Download template → 2) Fill → 3) Upload to Drive
     const tmpTemplate = path.join(TMP, `template_${templateFileId}.pdf`);
     await downloadDriveFile(templateFileId, tmpTemplate);
 
@@ -268,18 +207,8 @@ app.post('/fill', async (req, res) => {
     const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
     const outPath = path.join(TMP, outName);
 
-    let result;
-    if (FILL_MODE === 'xfdf') {
-      try {
-        result = await fillPdfWithPdftk(tmpTemplate, outPath, fields || {});
-      } catch (err) {
-        log('pdftk fill failed, falling back to pdf-lib:', err && (err.message || err));
-        result = await fillPdf(tmpTemplate, outPath, fields || {});
-      }
-    } else {
-      result = await fillPdf(tmpTemplate, outPath, fields || {});
-    }
-    log(`Filled PDF -> ${result.outPath} (${fs.statSync(result.outPath).size} bytes, fields filled: ${result.filled})`);
+    const result = await fillPdf(tmpTemplate, outPath, fields || {});
+    log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
 
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
     log('Uploaded to Drive:', uploaded);
@@ -297,6 +226,8 @@ app.post('/fill', async (req, res) => {
 
 app.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
+  log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON' :
                (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
+  log(`Font path: ${FONT_TTF_PATH}`);
 });
