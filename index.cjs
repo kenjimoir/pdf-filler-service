@@ -1,6 +1,7 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
-// Render-compatible
-// Modes: XFDF+pdftk (SJIS) or pdf-lib fallback
+// Requires deps: express, cors, pdf-lib, googleapis, iconv-lite
+// Optional: system pdftk (for XFDF mode with Shift_JIS etc.)
+// Render-compatible: uses process.env.PORT and os.tmpdir()
 
 const fs = require('fs');
 const os = require('os');
@@ -9,10 +10,8 @@ const express = require('express');
 const cors = require('cors');
 const { PDFDocument } = require('pdf-lib');
 const { google } = require('googleapis');
-
-// ★ NEW: SJIS + pdftk 実行に必要
-const iconv = require('iconv-lite');        // npm i iconv-lite
-const { execa } = require('execa');         // npm i execa
+const iconv = require('iconv-lite');                // ★ 追加：文字コード変換
+const { spawn } = require('child_process');         // ★ 追加：pdftk 実行
 
 const PORT = process.env.PORT || 8080;
 const TMP  = path.join(os.tmpdir(), 'pdf-filler');
@@ -21,15 +20,25 @@ ensureDir(TMP);
 // === Default fallback folder (used ONLY when no folderId is provided in request) ===
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
-// === Mode / Tool detection ===
-const FILL_MODE = (process.env.FILL_MODE || '').toUpperCase();  // 'XFDF' ならSJIS+pdftk優先
-const PDFTK_PATH = process.env.PDFTK_PATH || 'pdftk';            // パス未指定なら PATH から探す
+// === Fill mode / Encoding (ENV) ===
+const FILL_MODE = (process.env.FILL_MODE || 'pdf-lib').toLowerCase();     // 'pdf-lib' | 'xfdf'
+const XFDF_ENCODING = (process.env.XFDF_ENCODING || 'UTF-8');             // 'UTF-8' | 'Shift_JIS' | etc.
 
 function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 
+log('////////////////////////////////////////////////////////////');
+log('PDF filler starting…');
+log('TMP dir:', TMP);
+log('OUTPUT_FOLDER_ID (fallback):', OUTPUT_FOLDER_ID || '(none)');
+log('Using fill mode:', FILL_MODE.toUpperCase());
+log('Encoding:', XFDF_ENCODING);
+log('////////////////////////////////////////////////////////////');
+
 // ---- Google Drive client (supports Shared Drives) ----
 function getDriveClient() {
+  // Option A: GOOGLE_CREDENTIALS_JSON (paste JSON into Render env var)
+  // Option B: GOOGLE_APPLICATION_CREDENTIALS (path to a mounted JSON file)
   let credentials = null;
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     try { credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); }
@@ -37,7 +46,7 @@ function getDriveClient() {
   }
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/drive'],
-    ...(credentials ? { credentials } : {})
+    ...(credentials ? { credentials } : {}) // fallback to ADC / GOOGLE_APPLICATION_CREDENTIALS
   });
   return google.drive({ version: 'v3', auth });
 }
@@ -80,53 +89,8 @@ async function uploadToDrive(localPath, name, parentId) {
   return res.data;
 }
 
-// ---------------------------------------------------------------------------
-// ★ NEW: XFDF (Shift-JIS) を生成
-function escapeXml(s){
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
-}
-function buildXfdfSJIS(fields, pdfFileName) {
-  const grid = Object.entries(fields || {})
-    .filter(([k,v]) => v != null && v !== '')
-    .map(([k,v]) => {
-      const key = String(k);
-      const val = Array.isArray(v) ? v.join(', ') : String(v);
-      return `    <field name="${escapeXml(key)}"><value>${escapeXml(val)}</value></field>`;
-    })
-    .join('\n');
-
-  const xml = [
-    `<?xml version="1.0" encoding="Shift_JIS"?>`,
-    `<xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve">`,
-    pdfFileName ? `  <f href="${escapeXml(pdfFileName)}"/>` : '',
-    `  <fields>`,
-    grid,
-    `  </fields>`,
-    `</xfdf>`
-  ].join('\n');
-
-  // SJIS バイナリに変換して返す
-  return iconv.encode(xml, 'shift_jis');
-}
-
-// ★ NEW: pdftk を使って XFDF を流し込み（flatten 推奨）
-async function fillWithPdftk(templatePdfPath, fields, outPdfPath) {
-  const xfdfPath = outPdfPath.replace(/\.pdf$/i, '.xfdf');
-  const sjisBuf = buildXfdfSJIS(fields, path.basename(templatePdfPath));
-  fs.writeFileSync(xfdfPath, sjisBuf);
-
-  // pdftk template.pdf fill_form data.xfdf output out.pdf flatten
-  log('pdftk filling...', { templatePdfPath, xfdfPath, outPdfPath, PDFTK_PATH });
-  await execa(PDFTK_PATH, [templatePdfPath, 'fill_form', xfdfPath, 'output', outPdfPath, 'flatten']);
-  const size = fs.statSync(outPdfPath).size;
-  return { outPath: outPdfPath, filled: Object.keys(fields || {}).length, size, mode: 'XFDF+pdftk' };
-}
-
-// ---------------------------------------------------------------------------
-// 従来方式: pdf-lib でフォーム入力（フォールバック用）
-async function fillPdfWithPdfLib(srcPath, outPath, fields = {}) {
+// ---- PDF fill (pdf-lib path: handles text / checkbox / radio / dropdown) ----
+async function fillPdf(srcPath, outPath, fields = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
@@ -155,7 +119,7 @@ async function fillPdfWithPdfLib(srcPath, outPath, fields = {}) {
           try { f.select(val); filled++; } catch (_) {}
         }
       } catch (_) {
-        // field not found — ignore
+        // field not found — ignore missing field
       }
     }
     try { form.updateFieldAppearances(); } catch (_) {}
@@ -163,7 +127,76 @@ async function fillPdfWithPdfLib(srcPath, outPath, fields = {}) {
 
   const outBytes = await pdfDoc.save();
   fs.writeFileSync(outPath, outBytes);
-  return { outPath, filled, size: outBytes.length, mode: 'pdf-lib' };
+  return { outPath, filled, size: outBytes.length };
+}
+
+// ---- PDF fill (pdftk + XFDF path) ----
+async function fillPdfWithPdftk(templatePath, outPath, fields = {}) {
+  const xfdfBuf = buildXfdfBuffer(fields, XFDF_ENCODING);
+  const tmpBase = path.basename(outPath, '.pdf');
+  const tmpXfdf = path.join(TMP, `${tmpBase}.xfdf`);
+
+  // Write XFDF (binary if Shift_JIS)
+  fs.writeFileSync(tmpXfdf, xfdfBuf);
+
+  const pdfTk = 'pdftk';
+  log('pdftk filling...', {
+    templatePdfPath: templatePath,
+    xfdfPath: tmpXfdf,
+    outPdfPath: outPath,
+    PDFTK_PATH: pdfTk
+  });
+
+  return new Promise((resolve, reject) => {
+    const args = [templatePath, 'fill_form', tmpXfdf, 'output', outPath, 'flatten'];
+    const ps = spawn(pdfTk, args);
+    let stderr = '';
+    ps.stderr && ps.stderr.on('data', (d) => { stderr += d.toString(); });
+    ps.on('error', (e) => reject(e));
+    ps.on('close', (code) => {
+      if (code === 0) {
+        resolve({ outPath, filled: Object.keys(fields).length });
+      } else {
+        const err = new Error(`pdftk exited with code ${code}: ${stderr}`);
+        reject(err);
+      }
+    });
+  });
+}
+
+/**
+ * Build XFDF as Buffer with desired encoding.
+ * When encoding is 'Shift_JIS', returns SJIS-encoded Buffer via iconv-lite.
+ * Otherwise returns UTF-8 Buffer.
+ */
+function buildXfdfBuffer(fields, encoding = 'UTF-8') {
+  const enc = String(encoding || 'UTF-8');
+  let xml = `<?xml version="1.0" encoding="${enc}"?>\n`;
+  xml += '<xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve">\n';
+  xml += '  <fields>\n';
+  for (const [key, val] of Object.entries(fields || {})) {
+    const v = (val == null) ? '' : String(val);
+    xml += `    <field name="${escapeXmlAttr(key)}"><value>${escapeXmlText(v)}</value></field>\n`;
+  }
+  xml += '  </fields>\n';
+  xml += '</xfdf>\n';
+
+  if (/shift[_-]?jis/i.test(enc) || /sjis/i.test(enc)) {
+    return iconv.encode(xml, 'Shift_JIS');
+  }
+  return Buffer.from(xml, 'utf8');
+}
+
+function escapeXmlAttr(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+function escapeXmlText(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // ---- HTTP server ----
@@ -180,8 +213,8 @@ app.get('/health', (req, res) => {
     ok: true,
     tmpDir: TMP,
     hasOUTPUT_FOLDER_ID: !!OUTPUT_FOLDER_ID,
-    fillMode: FILL_MODE || 'AUTO',
-    pdftkPath: PDFTK_PATH,
+    fillMode: FILL_MODE,
+    xfdfEncoding: XFDF_ENCODING,
     credMode: process.env.GOOGLE_CREDENTIALS_JSON
       ? 'env-json'
       : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown')
@@ -221,6 +254,12 @@ app.post('/fill', async (req, res) => {
       return res.status(400).json({ error: 'templateFileId is required' });
     }
 
+    log('Fill request:', {
+      fillMode: FILL_MODE,
+      xfdfEncoding: XFDF_ENCODING,
+      folderId: folderId || '(none)'
+    });
+
     // 1) Download template → 2) Fill → 3) Upload to Drive
     const tmpTemplate = path.join(TMP, `template_${templateFileId}.pdf`);
     await downloadDriveFile(templateFileId, tmpTemplate);
@@ -229,24 +268,18 @@ app.post('/fill', async (req, res) => {
     const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
     const outPath = path.join(TMP, outName);
 
-    let result = null;
-
-    // --- Prefer XFDF+pdftk if requested or available ---
-    const wantXfdf = FILL_MODE === 'XFDF';
-    if (wantXfdf) {
+    let result;
+    if (FILL_MODE === 'xfdf') {
       try {
-        result = await fillWithPdftk(tmpTemplate, fields || {}, outPath);
-        log(`Filled (XFDF+pdftk) -> ${result.outPath} (${result.size} bytes, fields: ${result.filled})`);
-      } catch (e) {
-        log('pdftk fill failed, falling back to pdf-lib:', e && (e.message || e));
+        result = await fillPdfWithPdftk(tmpTemplate, outPath, fields || {});
+      } catch (err) {
+        log('pdftk fill failed, falling back to pdf-lib:', err && (err.message || err));
+        result = await fillPdf(tmpTemplate, outPath, fields || {});
       }
+    } else {
+      result = await fillPdf(tmpTemplate, outPath, fields || {});
     }
-
-    // --- Fallback to pdf-lib ---
-    if (!result) {
-      result = await fillPdfWithPdfLib(tmpTemplate, outPath, fields || {});
-      log(`Filled (pdf-lib) -> ${result.outPath} (${result.size} bytes, fields: ${result.filled})`);
-    }
+    log(`Filled PDF -> ${result.outPath} (${fs.statSync(result.outPath).size} bytes, fields filled: ${result.filled})`);
 
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
     log('Uploaded to Drive:', uploaded);
@@ -254,7 +287,6 @@ app.post('/fill', async (req, res) => {
     res.json({
       ok: true,
       filledCount: result.filled,
-      mode: result.mode,
       driveFile: uploaded
     });
   } catch (err) {
@@ -265,8 +297,6 @@ app.post('/fill', async (req, res) => {
 
 app.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
-  log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
-  log(`Mode: ${FILL_MODE || 'AUTO'}  PDFTK_PATH=${PDFTK_PATH}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON' :
                (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
 });
