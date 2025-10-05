@@ -1,6 +1,6 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
-// Requires deps: express, cors, pdf-lib, googleapis
-// Render-compatible: uses process.env.PORT and os.tmpdir()
+// Render-compatible
+// Modes: XFDF+pdftk (SJIS) or pdf-lib fallback
 
 const fs = require('fs');
 const os = require('os');
@@ -10,6 +10,10 @@ const cors = require('cors');
 const { PDFDocument } = require('pdf-lib');
 const { google } = require('googleapis');
 
+// ★ NEW: SJIS + pdftk 実行に必要
+const iconv = require('iconv-lite');        // npm i iconv-lite
+const { execa } = require('execa');         // npm i execa
+
 const PORT = process.env.PORT || 8080;
 const TMP  = path.join(os.tmpdir(), 'pdf-filler');
 ensureDir(TMP);
@@ -17,13 +21,15 @@ ensureDir(TMP);
 // === Default fallback folder (used ONLY when no folderId is provided in request) ===
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
+// === Mode / Tool detection ===
+const FILL_MODE = (process.env.FILL_MODE || '').toUpperCase();  // 'XFDF' ならSJIS+pdftk優先
+const PDFTK_PATH = process.env.PDFTK_PATH || 'pdftk';            // パス未指定なら PATH から探す
+
 function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
 function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 
 // ---- Google Drive client (supports Shared Drives) ----
 function getDriveClient() {
-  // Option A: GOOGLE_CREDENTIALS_JSON (paste JSON into Render env var)
-  // Option B: GOOGLE_APPLICATION_CREDENTIALS (path to a mounted JSON file)
   let credentials = null;
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     try { credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); }
@@ -31,7 +37,7 @@ function getDriveClient() {
   }
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/drive'],
-    ...(credentials ? { credentials } : {}) // fallback to ADC / GOOGLE_APPLICATION_CREDENTIALS
+    ...(credentials ? { credentials } : {})
   });
   return google.drive({ version: 'v3', auth });
 }
@@ -74,8 +80,53 @@ async function uploadToDrive(localPath, name, parentId) {
   return res.data;
 }
 
-// ---- PDF fill (handles text / checkbox / radio / dropdown) ----
-async function fillPdf(srcPath, outPath, fields = {}) {
+// ---------------------------------------------------------------------------
+// ★ NEW: XFDF (Shift-JIS) を生成
+function escapeXml(s){
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+function buildXfdfSJIS(fields, pdfFileName) {
+  const grid = Object.entries(fields || {})
+    .filter(([k,v]) => v != null && v !== '')
+    .map(([k,v]) => {
+      const key = String(k);
+      const val = Array.isArray(v) ? v.join(', ') : String(v);
+      return `    <field name="${escapeXml(key)}"><value>${escapeXml(val)}</value></field>`;
+    })
+    .join('\n');
+
+  const xml = [
+    `<?xml version="1.0" encoding="Shift_JIS"?>`,
+    `<xfdf xmlns="http://ns.adobe.com/xfdf/" xml:space="preserve">`,
+    pdfFileName ? `  <f href="${escapeXml(pdfFileName)}"/>` : '',
+    `  <fields>`,
+    grid,
+    `  </fields>`,
+    `</xfdf>`
+  ].join('\n');
+
+  // SJIS バイナリに変換して返す
+  return iconv.encode(xml, 'shift_jis');
+}
+
+// ★ NEW: pdftk を使って XFDF を流し込み（flatten 推奨）
+async function fillWithPdftk(templatePdfPath, fields, outPdfPath) {
+  const xfdfPath = outPdfPath.replace(/\.pdf$/i, '.xfdf');
+  const sjisBuf = buildXfdfSJIS(fields, path.basename(templatePdfPath));
+  fs.writeFileSync(xfdfPath, sjisBuf);
+
+  // pdftk template.pdf fill_form data.xfdf output out.pdf flatten
+  log('pdftk filling...', { templatePdfPath, xfdfPath, outPdfPath, PDFTK_PATH });
+  await execa(PDFTK_PATH, [templatePdfPath, 'fill_form', xfdfPath, 'output', outPdfPath, 'flatten']);
+  const size = fs.statSync(outPdfPath).size;
+  return { outPath: outPdfPath, filled: Object.keys(fields || {}).length, size, mode: 'XFDF+pdftk' };
+}
+
+// ---------------------------------------------------------------------------
+// 従来方式: pdf-lib でフォーム入力（フォールバック用）
+async function fillPdfWithPdfLib(srcPath, outPath, fields = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
@@ -88,8 +139,8 @@ async function fillPdf(srcPath, outPath, fields = {}) {
       try {
         const f = form.getField(String(key));
         const typeName = (f && f.constructor && f.constructor.name) || '';
-
         const val = rawVal == null ? '' : String(rawVal);
+
         if (typeName.includes('Text')) {
           f.setText(val);
           filled++;
@@ -104,7 +155,7 @@ async function fillPdf(srcPath, outPath, fields = {}) {
           try { f.select(val); filled++; } catch (_) {}
         }
       } catch (_) {
-        // field not found — ignore missing field
+        // field not found — ignore
       }
     }
     try { form.updateFieldAppearances(); } catch (_) {}
@@ -112,7 +163,7 @@ async function fillPdf(srcPath, outPath, fields = {}) {
 
   const outBytes = await pdfDoc.save();
   fs.writeFileSync(outPath, outBytes);
-  return { outPath, filled, size: outBytes.length };
+  return { outPath, filled, size: outBytes.length, mode: 'pdf-lib' };
 }
 
 // ---- HTTP server ----
@@ -129,6 +180,8 @@ app.get('/health', (req, res) => {
     ok: true,
     tmpDir: TMP,
     hasOUTPUT_FOLDER_ID: !!OUTPUT_FOLDER_ID,
+    fillMode: FILL_MODE || 'AUTO',
+    pdftkPath: PDFTK_PATH,
     credMode: process.env.GOOGLE_CREDENTIALS_JSON
       ? 'env-json'
       : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown')
@@ -176,8 +229,24 @@ app.post('/fill', async (req, res) => {
     const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
     const outPath = path.join(TMP, outName);
 
-    const result = await fillPdf(tmpTemplate, outPath, fields || {});
-    log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
+    let result = null;
+
+    // --- Prefer XFDF+pdftk if requested or available ---
+    const wantXfdf = FILL_MODE === 'XFDF';
+    if (wantXfdf) {
+      try {
+        result = await fillWithPdftk(tmpTemplate, fields || {}, outPath);
+        log(`Filled (XFDF+pdftk) -> ${result.outPath} (${result.size} bytes, fields: ${result.filled})`);
+      } catch (e) {
+        log('pdftk fill failed, falling back to pdf-lib:', e && (e.message || e));
+      }
+    }
+
+    // --- Fallback to pdf-lib ---
+    if (!result) {
+      result = await fillPdfWithPdfLib(tmpTemplate, outPath, fields || {});
+      log(`Filled (pdf-lib) -> ${result.outPath} (${result.size} bytes, fields: ${result.filled})`);
+    }
 
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
     log('Uploaded to Drive:', uploaded);
@@ -185,6 +254,7 @@ app.post('/fill', async (req, res) => {
     res.json({
       ok: true,
       filledCount: result.filled,
+      mode: result.mode,
       driveFile: uploaded
     });
   } catch (err) {
@@ -196,6 +266,7 @@ app.post('/fill', async (req, res) => {
 app.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
   log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
+  log(`Mode: ${FILL_MODE || 'AUTO'}  PDFTK_PATH=${PDFTK_PATH}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON' :
                (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
 });
