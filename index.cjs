@@ -1,5 +1,5 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
-// Requires deps: express, cors, pdf-lib, googleapis
+// Requires deps: express, cors, pdf-lib, googleapis, iconv-lite, @pdf-lib/fontkit
 // Render-compatible: uses process.env.PORT and os.tmpdir()
 
 const fs = require('fs');
@@ -9,34 +9,36 @@ const express = require('express');
 const cors = require('cors');
 const { PDFDocument } = require('pdf-lib');
 const { google } = require('googleapis');
+const iconv = require('iconv-lite');
+const fontkit = require('@pdf-lib/fontkit');
 
 const PORT = process.env.PORT || 8080;
-const TMP  = path.join(os.tmpdir(), 'pdf-filler');
+const TMP = path.join(os.tmpdir(), 'pdf-filler');
 ensureDir(TMP);
 
-// === Default fallback folder (used ONLY when no folderId is provided in request) ===
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
-function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
-function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+function log(...args) {
+  console.log(new Date().toISOString(), '-', ...args);
+}
 
-// --- JP font path (env overrides repo file) ---
-const FONT_TTF_PATH =
-  process.env.FONT_TTF_PATH ||
-  path.join(__dirname, 'fonts', 'NotoSansJP-Regular.ttf');
+function ensureDir(p) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
 
 // ---- Google Drive client (supports Shared Drives) ----
 function getDriveClient() {
-  // Option A: GOOGLE_CREDENTIALS_JSON (paste JSON into Render env var)
-  // Option B: GOOGLE_APPLICATION_CREDENTIALS (path to a mounted JSON file)
   let credentials = null;
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
-    try { credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); }
-    catch (e) { log('ERROR parsing GOOGLE_CREDENTIALS_JSON:', e && e.message); }
+    try {
+      credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+    } catch (e) {
+      log('ERROR parsing GOOGLE_CREDENTIALS_JSON:', e && e.message);
+    }
   }
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/drive'],
-    ...(credentials ? { credentials } : {}) // fallback to ADC / GOOGLE_APPLICATION_CREDENTIALS
+    ...(credentials ? { credentials } : {}),
   });
   return google.drive({ version: 'v3', auth });
 }
@@ -56,12 +58,6 @@ async function downloadDriveFile(fileId, destPath) {
   return destPath;
 }
 
-/**
- * Upload localPath to Drive.
- * - If parentId is provided (from request), it is used.
- * - Else if OUTPUT_FOLDER_ID env is set, it is used.
- * - Else it uploads to My Drive root of the service account.
- */
 async function uploadToDrive(localPath, name, parentId) {
   const drive = getDriveClient();
   const parents =
@@ -74,25 +70,33 @@ async function uploadToDrive(localPath, name, parentId) {
     requestBody: fileMetadata,
     media,
     fields: 'id, name, webViewLink, parents',
-    supportsAllDrives: true
+    supportsAllDrives: true,
   });
   return res.data;
 }
 
-// ---- PDF fill (pdf-lib only; embed JP font and redraw appearances) ----
+// ---- PDF fill (handles text / checkbox / radio / dropdown) ----
 async function fillPdf(srcPath, outPath, fields = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
-  // Try to embed JP font (subset)
-  let jpFont = null;
+  // === fontkit 登録 ===
   try {
-    if (fs.existsSync(FONT_TTF_PATH)) {
-      const fontBytes = fs.readFileSync(FONT_TTF_PATH);
-      jpFont = await pdfDoc.embedFont(fontBytes, { subset: true });
-      log('Embedded font:', FONT_TTF_PATH);
+    pdfDoc.registerFontkit(fontkit);
+  } catch (e) {
+    log('fontkit register skipped (maybe already registered):', e.message);
+  }
+
+  // === 日本語フォント読み込み・埋め込み ===
+  let customFont = null;
+  const fontPath = process.env.FONT_TTF_PATH || 'fonts/NotoSansJP-VariableFont_wght.ttf';
+  try {
+    if (fs.existsSync(fontPath)) {
+      const fontBytes = fs.readFileSync(fontPath);
+      customFont = await pdfDoc.embedFont(fontBytes, { subset: true });
+      log('Embedded custom font from:', fontPath);
     } else {
-      log('Font not found (skip embed):', FONT_TTF_PATH);
+      log('Custom font not found, continue without. path=', fontPath);
     }
   } catch (e) {
     log('Font embed failed (continue without):', e && e.message);
@@ -107,38 +111,36 @@ async function fillPdf(srcPath, outPath, fields = {}) {
       try {
         const f = form.getField(String(key));
         const typeName = (f && f.constructor && f.constructor.name) || '';
-
         const val = rawVal == null ? '' : String(rawVal);
 
+        // ---- Text ----
         if (typeName.includes('Text')) {
-          // Text fields: set value (JP text will render if font embedded)
+          if (customFont) {
+            try { f.updateAppearances(customFont); } catch (_) {}
+          }
           f.setText(val);
           filled++;
+
+        // ---- Checkbox ----
         } else if (typeName.includes('Check')) {
-          // Checkboxes expect boolean-ish
           const on = val.toLowerCase();
-          if (on === 'true' || on === 'yes' || on === '1' || on === 'on') f.check();
+          if (['true', 'yes', '1', 'on'].includes(on)) f.check();
           else f.uncheck();
           filled++;
+
+        // ---- Radio ----
         } else if (typeName.includes('Radio')) {
-          // Radios expect exact export value
           try { f.select(val); filled++; } catch (_) {}
+
+        // ---- Dropdown ----
         } else if (typeName.includes('Dropdown')) {
-          // Dropdowns expect exact export value
           try { f.select(val); filled++; } catch (_) {}
         }
       } catch (_) {
-        // Missing field: ignore
+        // ignore missing field
       }
     }
-
-    // Redraw appearances with JP font if available
-    try {
-      if (jpFont) form.updateFieldAppearances(jpFont);
-      else form.updateFieldAppearances();
-    } catch (e) {
-      log('updateFieldAppearances error:', e && e.message);
-    }
+    try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
   }
 
   const outBytes = await pdfDoc.save();
@@ -160,14 +162,12 @@ app.get('/health', (req, res) => {
     ok: true,
     tmpDir: TMP,
     hasOUTPUT_FOLDER_ID: !!OUTPUT_FOLDER_ID,
-    fontPath: FONT_TTF_PATH,
     credMode: process.env.GOOGLE_CREDENTIALS_JSON
       ? 'env-json'
-      : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown')
+      : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown'),
   });
 });
 
-// GET /fields?fileId=XXXXXXXX — lists PDF form field names
 app.get('/fields', async (req, res) => {
   try {
     const fileId = (req.query.fileId || '').trim();
@@ -187,12 +187,10 @@ app.get('/fields', async (req, res) => {
     res.json({ count: names.length, names });
   } catch (e) {
     log('List fields failed:', e && (e.stack || e));
-    res.status(500).json({ error: 'List fields failed', detail: e && (e.message || String(e)) });
+    res.status(500).json({ error: 'List fields failed', detail: e.message });
   }
 });
 
-// POST /fill
-// body: { templateFileId: "<Drive file id>", fields: {...}, outputName?: "baseName", folderId?: "<Drive folder id>" }
 app.post('/fill', async (req, res) => {
   try {
     const { templateFileId, fields, outputName, folderId } = req.body || {};
@@ -216,11 +214,11 @@ app.post('/fill', async (req, res) => {
     res.json({
       ok: true,
       filledCount: result.filled,
-      driveFile: uploaded
+      driveFile: uploaded,
     });
   } catch (err) {
     log('ERROR /fill:', err && (err.stack || err));
-    res.status(500).json({ error: 'Fill failed', detail: err && (err.message || String(err)) });
+    res.status(500).json({ error: 'Fill failed', detail: err.message });
   }
 });
 
@@ -228,6 +226,6 @@ app.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
   log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON' :
-               (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
-  log(`Font path: ${FONT_TTF_PATH}`);
+    (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
+  log(`Font path: ${process.env.FONT_TTF_PATH || 'fonts/NotoSansJP-VariableFont_wght.ttf'}`);
 });
