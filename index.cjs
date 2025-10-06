@@ -7,9 +7,8 @@ const os = require('os');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { PDFDocument } = require('pdf-lib');
+const { PDFDocument, rgb, degrees } = require('pdf-lib');
 const { google } = require('googleapis');
-const iconv = require('iconv-lite');
 const fontkit = require('@pdf-lib/fontkit');
 
 const PORT = process.env.PORT || 8080;
@@ -76,7 +75,7 @@ async function uploadToDrive(localPath, name, parentId) {
 }
 
 // ---- PDF fill (handles text / checkbox / radio / dropdown) ----
-async function fillPdf(srcPath, outPath, fields = {}) {
+async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
@@ -142,7 +141,22 @@ async function fillPdf(srcPath, outPath, fields = {}) {
     }
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
   }
-
+  // === 確認用の文字（透かし）を入れる部分 ===
+  const wmText = opts.watermarkText && String(opts.watermarkText).trim();
+  if (wmText) {
+    const pages = pdfDoc.getPages();
+    for (const page of pages) {
+      const { width, height } = page.getSize();
+      page.drawText(wmText, {
+        x: width / 2 - 200,    // 中央に配置
+        y: height / 2 - 40,
+        size: 80,              // 文字の大きさ
+        opacity: 0.12,         // うっすら見える程度
+        rotate: degrees(45),   // 斜めに表示
+        color: rgb(0.85, 0.1, 0.1)  // 赤みのある色
+      });
+    }
+  }
   const outBytes = await pdfDoc.save();
   fs.writeFileSync(outPath, outBytes);
   return { outPath, filled, size: outBytes.length };
@@ -193,7 +207,7 @@ app.get('/fields', async (req, res) => {
 
 app.post('/fill', async (req, res) => {
   try {
-    const { templateFileId, fields, outputName, folderId } = req.body || {};
+    const { templateFileId, fields, outputName, folderId, mode, watermarkText } = req.body || {};
     if (!templateFileId) {
       return res.status(400).json({ error: 'templateFileId is required' });
     }
@@ -205,7 +219,8 @@ app.post('/fill', async (req, res) => {
     const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
     const outPath = path.join(TMP, outName);
 
-    const result = await fillPdf(tmpTemplate, outPath, fields || {});
+    const wm = watermarkText || (mode === 'review' ? '確認用 / DRAFT' : '');
+    const result = await fillPdf(tmpTemplate, outPath, fields || {}, { watermarkText: wm });
     log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
 
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
