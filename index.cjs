@@ -88,7 +88,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
   // === 日本語フォント読み込み・埋め込み ===
   let customFont = null;
-  const fontPath = process.env.FONT_TTF_PATH || 'fonts/NotoSansJP-VariableFont_wght.ttf';
+  const fontPath = process.env.FONT_TTF_PATH || 'fonts/NotoSansJP-Regular.ttf';
   try {
     if (fs.existsSync(fontPath)) {
       const fontBytes = fs.readFileSync(fontPath);
