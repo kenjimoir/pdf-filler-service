@@ -1,5 +1,5 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
-// Requires deps: express, cors, pdf-lib, googleapis, @pdf-lib/fontkit
+// Requires deps: express, cors, pdf-lib, googleapis, iconv-lite, @pdf-lib/fontkit
 // Render-compatible: uses process.env.PORT and os.tmpdir()
 
 const fs = require('fs');
@@ -14,15 +14,14 @@ const fontkit = require('@pdf-lib/fontkit');
 const PORT = process.env.PORT || 8080;
 const TMP = path.join(os.tmpdir(), 'pdf-filler');
 ensureDir(TMP);
+const ROOT = process.cwd();
 
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
-const ROOT = path.resolve(__dirname); // for absolute font paths
-
-let LAST_EMBEDDED_FONT = ''; // for /health info
 
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
 }
+
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
@@ -81,18 +80,17 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
-  // === Register fontkit once ===
+  // === Register fontkit ===
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
 
-  // === Load & embed Japanese font (robust: tries env + multiple candidates) ===
   let customFont = null;
-  LAST_EMBEDDED_FONT = '';
+  global.LAST_EMBEDDED_FONT = '';
   const candidates = [
-    process.env.FONT_TTF_PATH,                                              // env override
-    path.join(ROOT, 'fonts/NotoSansCJKjp-Regular.otf'),                     // solid OTF
-    path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),                    // serif OTF
-    path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),                        // static TTF/OTF
-    path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf')
+    process.env.FONT_TTF_PATH,
+    path.join(ROOT, 'fonts/NotoSansCJKjp-Regular.otf'),
+    path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),
+    path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
+    path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf'),
   ].filter(Boolean);
 
   for (const p of candidates) {
@@ -100,42 +98,62 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       const exists = fs.existsSync(p);
       log('Font candidate:', p, exists ? '(exists)' : '(missing)');
       if (!exists) continue;
+
       const fontBytes = fs.readFileSync(p);
-      customFont = await pdfDoc.embedFont(fontBytes, { subset: true });
-      LAST_EMBEDDED_FONT = p;
-      log('Embedded JP font:', p);
-      break;
+      const ext = path.extname(p).toLowerCase();
+      const preferSubset = ext !== '.otf';   // ⚠️ OTF(CFF) → no subset to avoid crash
+
+      try {
+        customFont = await pdfDoc.embedFont(fontBytes, { subset: preferSubset });
+        global.LAST_EMBEDDED_FONT = p;
+        log('Embedded JP font:', p, '(subset:', preferSubset, ')');
+        break;
+      } catch (e) {
+        // Retry without subset as fallback
+        log('Embed with subset failed, retry no-subset:', e.message);
+        customFont = await pdfDoc.embedFont(fontBytes, { subset: false });
+        global.LAST_EMBEDDED_FONT = p;
+        log('Embedded JP font (no-subset):', p);
+        break;
+      }
     } catch (e) {
       log('Font try failed:', p, e.message);
     }
   }
+
   if (!customFont) log('WARNING: No JP font embedded; CJK text may appear blank.');
 
-  // === Fill fields ===
   let filled = 0;
   let form = null;
   try { form = pdfDoc.getForm(); } catch (_) {}
 
   if (form) {
-    for (const [key, rawVal] of Object.entries(fields || {})) {
+    for (const [key, rawVal] of Object.entries(fields)) {
       try {
         const f = form.getField(String(key));
         const typeName = (f && f.constructor && f.constructor.name) || '';
         const val = rawVal == null ? '' : String(rawVal);
 
+        // ---- Text ----
         if (typeName.includes('Text')) {
-          if (customFont) { try { f.updateAppearances(customFont); } catch (_) {} }
+          if (customFont) {
+            try { f.updateAppearances(customFont); } catch (_) {}
+          }
           f.setText(val);
           filled++;
 
+        // ---- Checkbox ----
         } else if (typeName.includes('Check')) {
           const on = val.toLowerCase();
-          if (['true', 'yes', '1', 'on'].includes(on)) f.check(); else f.uncheck();
+          if (['true', 'yes', '1', 'on'].includes(on)) f.check();
+          else f.uncheck();
           filled++;
 
+        // ---- Radio ----
         } else if (typeName.includes('Radio')) {
           try { f.select(val); filled++; } catch (_) {}
 
+        // ---- Dropdown ----
         } else if (typeName.includes('Dropdown')) {
           try { f.select(val); filled++; } catch (_) {}
         }
@@ -143,13 +161,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         // ignore missing field
       }
     }
-
-    // Refresh appearances using our font, then flatten so all viewers show text
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
     try { form.flatten(); } catch (_) {}
   }
 
-  // === Optional watermark (good for font sanity check) ===
+  // === Optional watermark ===
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
   if (wmText) {
     const pages = pdfDoc.getPages();
@@ -161,12 +177,33 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         size: 80,
         opacity: 0.12,
         rotate: degrees(45),
-        color: rgb(0.85, 0.1, 0.1),
+        color: rgb(0.85, 0.1, 0.1)
       });
     }
   }
 
-  const outBytes = await pdfDoc.save();
+  // ---- Save PDF safely (avoid OTF crash) ----
+  let outBytes;
+  try {
+    outBytes = await pdfDoc.save();
+  } catch (e) {
+    log('pdfDoc.save() failed, retrying without subsetting:', e.message);
+    const re = await PDFDocument.load(bytes, { updateFieldAppearances: true });
+    try { re.registerFontkit(fontkit); } catch (_) {}
+    if (global.LAST_EMBEDDED_FONT && fs.existsSync(global.LAST_EMBEDDED_FONT)) {
+      try {
+        const fb = fs.readFileSync(global.LAST_EMBEDDED_FONT);
+        const fnt = await re.embedFont(fb, { subset: false });
+        const frm = re.getForm();
+        try { frm?.updateFieldAppearances(fnt); } catch (_) {}
+        try { frm?.flatten(); } catch (_) {}
+      } catch (e2) {
+        log('Fallback embed failed:', e2.message);
+      }
+    }
+    outBytes = await re.save();
+  }
+
   fs.writeFileSync(outPath, outBytes);
   return { outPath, filled, size: outBytes.length };
 }
@@ -188,8 +225,8 @@ app.get('/health', (req, res) => {
     credMode: process.env.GOOGLE_CREDENTIALS_JSON
       ? 'env-json'
       : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown'),
-    fontEnv: process.env.FONT_TTF_PATH || '',
-    lastEmbeddedFont: LAST_EMBEDDED_FONT || '(none yet)'
+    fontEnv: process.env.FONT_TTF_PATH || '(none)',
+    lastEmbeddedFont: global.LAST_EMBEDDED_FONT || '(none yet)',
   });
 });
 
@@ -253,5 +290,5 @@ app.listen(PORT, () => {
   log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON' :
     (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
-  log(`FONT_TTF_PATH: ${process.env.FONT_TTF_PATH || '(not set — will try bundled fonts)'}`);
+  log(`FONT_TTF_PATH: ${process.env.FONT_TTF_PATH || 'fonts/NotoSansCJKjp-Regular.otf'}`);
 });
