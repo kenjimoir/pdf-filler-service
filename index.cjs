@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { PDFDocument, rgb, degrees } = require('pdf-lib');
+const { PDFDocument, rgb, degrees, PDFName, PDFBool } = require('pdf-lib');
 const { google } = require('googleapis');
 const fontkit = require('@pdf-lib/fontkit');
 
@@ -126,6 +126,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   let filled = 0;
   let form = null;
   try { form = pdfDoc.getForm(); } catch (_) {}
+  // Force viewers like Acrobat/Drive to render filled values
+  try {
+    const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
+    if (acroFormRef) {
+      const acroForm = pdfDoc.context.lookup(acroFormRef);
+      if (acroForm) acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    }
+  } catch (_) {}
 
   if (form) {
     for (const [key, rawVal] of Object.entries(fields)) {
