@@ -185,6 +185,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     // Rebuild appearance streams using our font
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
+    try { form.flatten(); } catch (_) {} // ensure values are drawn
 
     // --- Step 1: test visibility with flatten() OFF ---
     // try { form.flatten(); } catch (_) {}
