@@ -83,6 +83,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   // === Register fontkit ===
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
 
+  // === Embed Japanese font (safe for OTF/CFF) ===
   let customFont = null;
   global.LAST_EMBEDDED_FONT = '';
   const candidates = [
@@ -101,7 +102,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
       const fontBytes = fs.readFileSync(p);
       const ext = path.extname(p).toLowerCase();
-      const preferSubset = ext !== '.otf'; // avoid crash with OTF subset
+      const preferSubset = ext !== '.otf'; // avoid CFF subset crash
 
       try {
         customFont = await pdfDoc.embedFont(fontBytes, { subset: preferSubset });
@@ -126,69 +127,75 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   let form = null;
   try { form = pdfDoc.getForm(); } catch (_) {}
 
-  // --- Make sure the viewer knows how to draw our filled values ---
+  // --- AcroForm defaults: force our font everywhere ---
   try {
     const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
     if (acroFormRef) {
       const acroForm = pdfDoc.context.lookup(acroFormRef, PDFDict);
 
-      // ✅ DR (default resources) — link our embedded font as F0
+      // DR.Font F0 -> customFont
       const dr = (acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({}));
       const drFont = (dr.get(PDFName.of('Font')) || pdfDoc.context.obj({}));
       if (customFont) drFont.set(PDFName.of('F0'), customFont.ref);
       dr.set(PDFName.of('Font'), drFont);
       acroForm.set(PDFName.of('DR'), dr);
 
-      // ✅ DA (default appearance) — use F0 10pt, black
+      // DA -> "/F0 10 Tf 0 g" (10pt, black)
       acroForm.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
 
-      // ✅ Force viewer to redraw
+      // Ask viewers to regenerate if needed
       acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
     }
   } catch (e) {
     log('AcroForm DR/DA setup failed:', e.message);
   }
 
-  // ---- Fill fields ----
+  // ---- Fill fields & enforce per-field DA for text fields ----
   if (form) {
+    const pdfCtx = pdfDoc.context;
+
     for (const [key, rawVal] of Object.entries(fields)) {
       try {
-        const f = form.getField(String(key));
-        const typeName = (f && f.constructor && f.constructor.name) || '';
+        const field = form.getField(String(key));
+        const typeName = (field && field.constructor && field.constructor.name) || '';
         const val = rawVal == null ? '' : String(rawVal);
 
-        // ---- Text ----
         if (typeName.includes('Text')) {
+          // Overwrite the field's own DA (your template had Kozuka Mincho + Auto size)
+          try {
+            const acro = field.acroField || field._acroField || field['acroField'];
+            if (acro && acro.dict) {
+              acro.dict.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
+            }
+          } catch (_) {}
+
+          // Set text & appearances with our JP font
           if (customFont) {
-            try { f.updateAppearances(customFont); } catch (_) {}
+            try { field.updateAppearances(customFont); } catch (_) {}
           }
-          f.setText(val);
+          field.setText(val);
           filled++;
 
-        // ---- Checkbox ----
         } else if (typeName.includes('Check')) {
           const on = val.toLowerCase();
-          if (['true', 'yes', '1', 'on'].includes(on)) f.check();
-          else f.uncheck();
+          if (['true', 'yes', '1', 'on'].includes(on)) field.check();
+          else field.uncheck();
           filled++;
 
-        // ---- Radio ----
         } else if (typeName.includes('Radio')) {
-          try { f.select(val); filled++; } catch (_) {}
+          try { field.select(val); filled++; } catch (_) {}
 
-        // ---- Dropdown ----
         } else if (typeName.includes('Dropdown')) {
-          try { f.select(val); filled++; } catch (_) {}
+          try { field.select(val); filled++; } catch (_) {}
         }
       } catch (_) {}
     }
 
-    // Rebuild appearance streams using our font
+    // One more pass: rebuild everything using our font
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
-    try { form.flatten(); } catch (_) {} // ensure values are drawn
 
-    // --- Step 1: test visibility with flatten() OFF ---
-    // try { form.flatten(); } catch (_) {}
+    // Flatten so visuals are baked into the page (solves all viewer quirks)
+    try { form.flatten(); } catch (_) {}
   }
 
   // === Optional watermark ===
