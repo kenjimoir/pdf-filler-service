@@ -1,5 +1,5 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
-// Requires deps: express, cors, pdf-lib, googleapis, iconv-lite, @pdf-lib/fontkit
+// Requires deps: express, cors, pdf-lib, googleapis, @pdf-lib/fontkit
 // Render-compatible: uses process.env.PORT and os.tmpdir()
 
 const fs = require('fs');
@@ -16,11 +16,13 @@ const TMP = path.join(os.tmpdir(), 'pdf-filler');
 ensureDir(TMP);
 
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
+const ROOT = path.resolve(__dirname); // for absolute font paths
+
+let LAST_EMBEDDED_FONT = ''; // for /health info
 
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
 }
-
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
@@ -79,59 +81,61 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
-  // === fontkit 登録 ===
-  try {
-    pdfDoc.registerFontkit(fontkit);
-  } catch (e) {
-    log('fontkit register skipped (maybe already registered):', e.message);
-  }
+  // === Register fontkit once ===
+  try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
 
-  // === 日本語フォント読み込み・埋め込み ===
+  // === Load & embed Japanese font (robust: tries env + multiple candidates) ===
   let customFont = null;
-  const fontPath = process.env.FONT_TTF_PATH || 'fonts/NotoSansJP-Regular.ttf';
-  try {
-    if (fs.existsSync(fontPath)) {
-      const fontBytes = fs.readFileSync(fontPath);
-      customFont = await pdfDoc.embedFont(fontBytes, { subset: true });
-      log('Embedded custom font from:', fontPath);
-    } else {
-      log('Custom font not found, continue without. path=', fontPath);
-    }
-  } catch (e) {
-    log('Font embed failed (continue without):', e && e.message);
-  }
+  LAST_EMBEDDED_FONT = '';
+  const candidates = [
+    process.env.FONT_TTF_PATH,                                              // env override
+    path.join(ROOT, 'fonts/NotoSansCJKjp-Regular.otf'),                     // solid OTF
+    path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),                    // serif OTF
+    path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),                        // static TTF/OTF
+    path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf')
+  ].filter(Boolean);
 
+  for (const p of candidates) {
+    try {
+      const exists = fs.existsSync(p);
+      log('Font candidate:', p, exists ? '(exists)' : '(missing)');
+      if (!exists) continue;
+      const fontBytes = fs.readFileSync(p);
+      customFont = await pdfDoc.embedFont(fontBytes, { subset: true });
+      LAST_EMBEDDED_FONT = p;
+      log('Embedded JP font:', p);
+      break;
+    } catch (e) {
+      log('Font try failed:', p, e.message);
+    }
+  }
+  if (!customFont) log('WARNING: No JP font embedded; CJK text may appear blank.');
+
+  // === Fill fields ===
   let filled = 0;
   let form = null;
   try { form = pdfDoc.getForm(); } catch (_) {}
 
   if (form) {
-    for (const [key, rawVal] of Object.entries(fields)) {
+    for (const [key, rawVal] of Object.entries(fields || {})) {
       try {
         const f = form.getField(String(key));
         const typeName = (f && f.constructor && f.constructor.name) || '';
         const val = rawVal == null ? '' : String(rawVal);
 
-        // ---- Text ----
         if (typeName.includes('Text')) {
-          if (customFont) {
-            try { f.updateAppearances(customFont); } catch (_) {}
-          }
+          if (customFont) { try { f.updateAppearances(customFont); } catch (_) {} }
           f.setText(val);
           filled++;
 
-        // ---- Checkbox ----
         } else if (typeName.includes('Check')) {
           const on = val.toLowerCase();
-          if (['true', 'yes', '1', 'on'].includes(on)) f.check();
-          else f.uncheck();
+          if (['true', 'yes', '1', 'on'].includes(on)) f.check(); else f.uncheck();
           filled++;
 
-        // ---- Radio ----
         } else if (typeName.includes('Radio')) {
           try { f.select(val); filled++; } catch (_) {}
 
-        // ---- Dropdown ----
         } else if (typeName.includes('Dropdown')) {
           try { f.select(val); filled++; } catch (_) {}
         }
@@ -139,24 +143,29 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         // ignore missing field
       }
     }
+
+    // Refresh appearances using our font, then flatten so all viewers show text
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
+    try { form.flatten(); } catch (_) {}
   }
-  // === 確認用の文字（透かし）を入れる部分 ===
+
+  // === Optional watermark (good for font sanity check) ===
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
   if (wmText) {
     const pages = pdfDoc.getPages();
     for (const page of pages) {
       const { width, height } = page.getSize();
       page.drawText(wmText, {
-        x: width / 2 - 200,    // 中央に配置
+        x: width / 2 - 200,
         y: height / 2 - 40,
-        size: 80,              // 文字の大きさ
-        opacity: 0.12,         // うっすら見える程度
-        rotate: degrees(45),   // 斜めに表示
-        color: rgb(0.85, 0.1, 0.1)  // 赤みのある色
+        size: 80,
+        opacity: 0.12,
+        rotate: degrees(45),
+        color: rgb(0.85, 0.1, 0.1),
       });
     }
   }
+
   const outBytes = await pdfDoc.save();
   fs.writeFileSync(outPath, outBytes);
   return { outPath, filled, size: outBytes.length };
@@ -179,6 +188,8 @@ app.get('/health', (req, res) => {
     credMode: process.env.GOOGLE_CREDENTIALS_JSON
       ? 'env-json'
       : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown'),
+    fontEnv: process.env.FONT_TTF_PATH || '',
+    lastEmbeddedFont: LAST_EMBEDDED_FONT || '(none yet)'
   });
 });
 
@@ -242,5 +253,5 @@ app.listen(PORT, () => {
   log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON' :
     (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
-  log(`Font path: ${process.env.FONT_TTF_PATH || 'fonts/NotoSansJP-VariableFont_wght.ttf'}`);
+  log(`FONT_TTF_PATH: ${process.env.FONT_TTF_PATH || '(not set — will try bundled fonts)'}`);
 });
