@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { PDFDocument, rgb, degrees, PDFName, PDFBool } = require('pdf-lib');
+const { PDFDocument, rgb, degrees, PDFName, PDFBool, PDFDict, PDFString } = require('pdf-lib');
 const { google } = require('googleapis');
 const fontkit = require('@pdf-lib/fontkit');
 
@@ -101,7 +101,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
       const fontBytes = fs.readFileSync(p);
       const ext = path.extname(p).toLowerCase();
-      const preferSubset = ext !== '.otf';   // ⚠️ OTF(CFF) → no subset to avoid crash
+      const preferSubset = ext !== '.otf'; // avoid crash with OTF subset
 
       try {
         customFont = await pdfDoc.embedFont(fontBytes, { subset: preferSubset });
@@ -109,7 +109,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         log('Embedded JP font:', p, '(subset:', preferSubset, ')');
         break;
       } catch (e) {
-        // Retry without subset as fallback
         log('Embed with subset failed, retry no-subset:', e.message);
         customFont = await pdfDoc.embedFont(fontBytes, { subset: false });
         global.LAST_EMBEDDED_FONT = p;
@@ -126,15 +125,31 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   let filled = 0;
   let form = null;
   try { form = pdfDoc.getForm(); } catch (_) {}
-  // Force viewers like Acrobat/Drive to render filled values
+
+  // --- Make sure the viewer knows how to draw our filled values ---
   try {
     const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
     if (acroFormRef) {
-      const acroForm = pdfDoc.context.lookup(acroFormRef);
-      if (acroForm) acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
-    }
-  } catch (_) {}
+      const acroForm = pdfDoc.context.lookup(acroFormRef, PDFDict);
 
+      // ✅ DR (default resources) — link our embedded font as F0
+      const dr = (acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({}));
+      const drFont = (dr.get(PDFName.of('Font')) || pdfDoc.context.obj({}));
+      if (customFont) drFont.set(PDFName.of('F0'), customFont.ref);
+      dr.set(PDFName.of('Font'), drFont);
+      acroForm.set(PDFName.of('DR'), dr);
+
+      // ✅ DA (default appearance) — use F0 10pt, black
+      acroForm.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
+
+      // ✅ Force viewer to redraw
+      acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    }
+  } catch (e) {
+    log('AcroForm DR/DA setup failed:', e.message);
+  }
+
+  // ---- Fill fields ----
   if (form) {
     for (const [key, rawVal] of Object.entries(fields)) {
       try {
@@ -165,12 +180,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         } else if (typeName.includes('Dropdown')) {
           try { f.select(val); filled++; } catch (_) {}
         }
-      } catch (_) {
-        // ignore missing field
-      }
+      } catch (_) {}
     }
+
+    // Rebuild appearance streams using our font
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
-    try { form.flatten(); } catch (_) {}
+
+    // --- Step 1: test visibility with flatten() OFF ---
+    // try { form.flatten(); } catch (_) {}
   }
 
   // === Optional watermark ===
@@ -190,26 +207,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // ---- Save PDF safely (avoid OTF crash) ----
+  // ---- Save PDF safely ----
   let outBytes;
   try {
     outBytes = await pdfDoc.save();
   } catch (e) {
-    log('pdfDoc.save() failed, retrying without subsetting:', e.message);
-    const re = await PDFDocument.load(bytes, { updateFieldAppearances: true });
-    try { re.registerFontkit(fontkit); } catch (_) {}
-    if (global.LAST_EMBEDDED_FONT && fs.existsSync(global.LAST_EMBEDDED_FONT)) {
-      try {
-        const fb = fs.readFileSync(global.LAST_EMBEDDED_FONT);
-        const fnt = await re.embedFont(fb, { subset: false });
-        const frm = re.getForm();
-        try { frm?.updateFieldAppearances(fnt); } catch (_) {}
-        try { frm?.flatten(); } catch (_) {}
-      } catch (e2) {
-        log('Fallback embed failed:', e2.message);
-      }
-    }
-    outBytes = await re.save();
+    log('pdfDoc.save() failed, retrying:', e.message);
+    outBytes = await pdfDoc.save({ useObjectStreams: false });
   }
 
   fs.writeFileSync(outPath, outBytes);
