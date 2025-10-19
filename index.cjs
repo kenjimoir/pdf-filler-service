@@ -180,8 +180,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     // Rebuild appearance streams using our font
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
-    // Flatten so visuals are baked into the page (solves viewer quirks)
-    try { form.flatten(); } catch (_) {}
+    // 🧩 Don’t flatten yet — let Acrobat/Preview render the fields
+    try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
   }
 
   // === Optional watermark ===
