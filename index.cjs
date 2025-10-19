@@ -312,3 +312,86 @@ app.listen(PORT, () => {
     (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
   log(`FONT_TTF_PATH: ${process.env.FONT_TTF_PATH || 'fonts/NotoSansCJKjp-Regular.otf'}`);
 });
+
+// --- DEBUG 1: passthrough upload (no pdf-lib) ---
+// Proves the template itself renders when untouched.
+app.get('/debug/passthrough', async (req, res) => {
+  try {
+    const fileId = (req.query.fileId || '').trim();
+    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
+
+    const local = path.join(TMP, `pt_${fileId}.pdf`);
+    await downloadDriveFile(fileId, local);
+
+    const uploaded = await uploadToDrive(local, `PASSTHROUGH_${Date.now()}.pdf`);
+    return res.json({ ok:true, link: uploaded.webViewLink });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+// --- DEBUG 2: roundtrip via pdf-lib (no edits) ---
+// If this turns blank, pdf-lib is the thing blanking it.
+app.get('/debug/roundtrip', async (req, res) => {
+  try {
+    const fileId = (req.query.fileId || '').trim();
+    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
+
+    const src = path.join(TMP, `rt_${fileId}.pdf`);
+    await downloadDriveFile(fileId, src);
+
+    const bytes = fs.readFileSync(src);
+    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
+    // minimal save options to preserve content
+    const outBytes = await doc.save({ useObjectStreams: false });
+    const out = path.join(TMP, `ROUNDTRIP_${Date.now()}.pdf`);
+    fs.writeFileSync(out, outBytes);
+
+    const uploaded = await uploadToDrive(out, `ROUNDTRIP_${Date.now()}.pdf`);
+    return res.json({ ok:true, link: uploaded.webViewLink });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+// --- DEBUG 3: prove drawing works (no forms) ---
+// Draw big visible text on page 1 using the embedded font.
+app.get('/debug/overlay', async (req, res) => {
+  try {
+    const fileId = (req.query.fileId || '').trim();
+    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
+
+    const src = path.join(TMP, `ov_${fileId}.pdf`);
+    await downloadDriveFile(fileId, src);
+
+    const bytes = fs.readFileSync(src);
+    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
+
+    // Embed the env font (KozMin), fallback to Noto if missing
+    let fontBytes = null;
+    const pref = process.env.FONT_TTF_PATH || '';
+    if (pref && fs.existsSync(pref)) fontBytes = fs.readFileSync(pref);
+    else {
+      const tries = [
+        path.join(process.cwd(), 'fonts/NotoSerifCJKjp-Regular.otf'),
+        path.join(process.cwd(), 'fonts/NotoSansJP-Regular.ttf'),
+      ];
+      for (const t of tries) if (fs.existsSync(t)) { fontBytes = fs.readFileSync(t); break; }
+    }
+    const font = fontBytes ? await doc.embedFont(fontBytes, { subset:false }) : undefined;
+
+    const page = doc.getPages()[0];
+    page.drawText('VISIBLE OVERLAY TEST あいうえお 山田太郎', {
+      x: 48, y: 720, size: 14, font, color: rgb(0,0,0)
+    });
+
+    const outBytes = await doc.save({ useObjectStreams:false });
+    const out = path.join(TMP, `OVERLAY_${Date.now()}.pdf`);
+    fs.writeFileSync(out, outBytes);
+
+    const uploaded = await uploadToDrive(out, `OVERLAY_${Date.now()}.pdf`);
+    return res.json({ ok:true, link: uploaded.webViewLink });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:e.message });
+  }
+});
