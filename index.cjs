@@ -1,6 +1,6 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
-// Deps: express, cors, pdf-lib, googleapis, @pdf-lib/fontkit
-// Render-compatible: uses process.env.PORT and os.tmpdir()
+// Requires: express, cors, pdf-lib, googleapis, @pdf-lib/fontkit
+// (Render-compatible: uses process.env.PORT and os.tmpdir())
 
 const fs = require('fs');
 const os = require('os');
@@ -10,14 +10,6 @@ const cors = require('cors');
 const { PDFDocument, rgb, degrees, PDFName, PDFBool, PDFDict, PDFString } = require('pdf-lib');
 const { google } = require('googleapis');
 const fontkit = require('@pdf-lib/fontkit');
-
-// ---- show crash reasons in Render logs ----
-process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT EXCEPTION:', err && (err.stack || err));
-});
-process.on('unhandledRejection', (err) => {
-  console.error('UNHANDLED REJECTION:', err && (err.stack || err));
-});
 
 const PORT = process.env.PORT || 8080;
 const TMP = path.join(os.tmpdir(), 'pdf-filler');
@@ -29,7 +21,6 @@ const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
 }
-
 function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
@@ -38,11 +29,7 @@ function ensureDir(p) {
 function getDriveClient() {
   let credentials = null;
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
-    try {
-      credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-    } catch (e) {
-      log('ERROR parsing GOOGLE_CREDENTIALS_JSON:', e && e.message);
-    }
+    try { credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); } catch (e) { log('ERROR parsing GOOGLE_CREDENTIALS_JSON:', e && e.message); }
   }
   const auth = new google.auth.GoogleAuth({
     scopes: ['https://www.googleapis.com/auth/drive'],
@@ -65,13 +52,11 @@ async function downloadDriveFile(fileId, destPath) {
   });
   return destPath;
 }
-
 async function uploadToDrive(localPath, name, parentId) {
   const drive = getDriveClient();
   const parents =
     parentId ? [parentId] :
     (OUTPUT_FOLDER_ID ? [OUTPUT_FOLDER_ID] : undefined);
-
   const fileMetadata = { name, parents };
   const media = { mimeType: 'application/pdf', body: fs.createReadStream(localPath) };
   const res = await drive.files.create({
@@ -88,14 +73,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
-  // register fontkit
+  // ✅ Register fontkit before embedding fonts
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
 
-  // --- Embed JP font (safe for OTF/CFF) ---
+  // === Embed Japanese font (safe for OTF/CFF) ===
   let customFont = null;
   global.LAST_EMBEDDED_FONT = '';
   const candidates = [
-    process.env.FONT_TTF_PATH,
+    process.env.FONT_TTF_PATH,                                      // e.g., fonts/KozMinPr6N-Regular.otf
     path.join(ROOT, 'fonts/NotoSansCJKjp-Regular.otf'),
     path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),
     path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
@@ -110,7 +95,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
       const fontBytes = fs.readFileSync(p);
       const ext = path.extname(p).toLowerCase();
-      const preferSubset = ext !== '.otf'; // OTF(CFF) can crash when subsetting
+      const preferSubset = ext !== '.otf'; // avoid CFF subset crash
 
       try {
         customFont = await pdfDoc.embedFont(fontBytes, { subset: preferSubset });
@@ -128,37 +113,36 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log('Font try failed:', p, e.message);
     }
   }
-
   if (!customFont) log('WARNING: No JP font embedded; CJK text may appear blank.');
 
   let filled = 0;
   let form = null;
   try { form = pdfDoc.getForm(); } catch (_) {}
 
-  // --- AcroForm defaults (DR/DA + NeedAppearances) ---
+  // --- AcroForm defaults: force our font everywhere ---
   try {
     const acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
     if (acroFormRef) {
       const acroForm = pdfDoc.context.lookup(acroFormRef, PDFDict);
 
-      // DR.Font → F0 = custom font
+      // DR.Font F0 -> customFont
       const dr = (acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({}));
       const drFont = (dr.get(PDFName.of('Font')) || pdfDoc.context.obj({}));
       if (customFont) drFont.set(PDFName.of('F0'), customFont.ref);
       dr.set(PDFName.of('Font'), drFont);
       acroForm.set(PDFName.of('DR'), dr);
 
-      // DA default appearance (10pt, black)
+      // DA -> "/F0 10 Tf 0 g" (10pt, black)
       acroForm.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
 
-      // Ask viewers to re-generate if needed
+      // Ask viewers to regenerate if needed
       acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
     }
   } catch (e) {
     log('AcroForm DR/DA setup failed:', e.message);
   }
 
-  // ---- Fill fields & override per-field DA for text fields ----
+  // ---- Fill fields & enforce per-field DA for text fields ----
   if (form) {
     for (const [key, rawVal] of Object.entries(fields)) {
       try {
@@ -167,7 +151,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         const val = rawVal == null ? '' : String(rawVal);
 
         if (typeName.includes('Text')) {
-          // Overwrite field-level DA so it's not stuck on "Auto + Kozuka"
+          // Overwrite the field's own DA (template often has auto-size Kozuka)
           try {
             const acro = field.acroField || field._acroField || field['acroField'];
             if (acro && acro.dict) acro.dict.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
@@ -194,29 +178,26 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       } catch (_) {}
     }
 
-    // Rebuild appearances with our font and bake them in
+    // Rebuild appearance streams using our font
     try { form.updateFieldAppearances(customFont || undefined); } catch (_) {}
+    // Flatten so visuals are baked into the page (solves viewer quirks)
     try { form.flatten(); } catch (_) {}
   }
 
-  // Optional watermark
+  // === Optional watermark ===
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
   if (wmText) {
     const pages = pdfDoc.getPages();
     for (const page of pages) {
       const { width, height } = page.getSize();
       page.drawText(wmText, {
-        x: width / 2 - 200,
-        y: height / 2 - 40,
-        size: 80,
-        opacity: 0.12,
-        rotate: degrees(45),
-        color: rgb(0.85, 0.1, 0.1),
+        x: width / 2 - 200, y: height / 2 - 40,
+        size: 80, opacity: 0.12, rotate: degrees(45), color: rgb(0.85, 0.1, 0.1)
       });
     }
   }
 
-  // Save safely
+  // ---- Save PDF safely ----
   let outBytes;
   try {
     outBytes = await pdfDoc.save();
@@ -224,7 +205,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     log('pdfDoc.save() failed, retrying:', e.message);
     outBytes = await pdfDoc.save({ useObjectStreams: false });
   }
-
   fs.writeFileSync(outPath, outBytes);
   return { outPath, filled, size: outBytes.length };
 }
@@ -237,7 +217,6 @@ app.use(express.json({ limit: '10mb' }));
 app.get('/', (req, res) => {
   res.type('text/plain').send('PDF filler is up. Try GET /health');
 });
-
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
@@ -248,10 +227,8 @@ app.get('/health', (req, res) => {
       : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown'),
     fontEnv: process.env.FONT_TTF_PATH || '(none)',
     lastEmbeddedFont: global.LAST_EMBEDDED_FONT || '(none yet)',
-    rssMB: Math.round(process.memoryUsage().rss / 1048576),
   });
 });
-
 app.get('/fields', async (req, res) => {
   try {
     const fileId = (req.query.fileId || '').trim();
@@ -275,7 +252,94 @@ app.get('/fields', async (req, res) => {
   }
 });
 
-// ---- Main fill endpoint (keeps Drive upload) ----
+// --- DEBUG 1: passthrough upload (no pdf-lib)
+app.get('/debug/passthrough', async (req, res) => {
+  try {
+    const fileId = (req.query.fileId || '').trim();
+    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
+
+    const local = path.join(TMP, `pt_${fileId}.pdf`);
+    await downloadDriveFile(fileId, local);
+
+    const uploaded = await uploadToDrive(local, `PASSTHROUGH_${Date.now()}.pdf`);
+    return res.json({ ok:true, link: uploaded.webViewLink });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+// --- DEBUG 2: roundtrip via pdf-lib (no edits)
+app.get('/debug/roundtrip', async (req, res) => {
+  try {
+    const fileId = (req.query.fileId || '').trim();
+    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
+
+    const src = path.join(TMP, `rt_${fileId}.pdf`);
+    await downloadDriveFile(fileId, src);
+
+    const bytes = fs.readFileSync(src);
+    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
+    const outBytes = await doc.save({ useObjectStreams: false });
+    const out = path.join(TMP, `ROUNDTRIP_${Date.now()}.pdf`);
+    fs.writeFileSync(out, outBytes);
+
+    const uploaded = await uploadToDrive(out, `ROUNDTRIP_${Date.now()}.pdf`);
+    return res.json({ ok:true, link: uploaded.webViewLink });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+// --- DEBUG 3: visible overlay (registerFontkit FIXED)
+app.get('/debug/overlay', async (req, res) => {
+  try {
+    const fileId = (req.query.fileId || '').trim();
+    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
+
+    const src = path.join(TMP, `ov_${fileId}.pdf`);
+    await downloadDriveFile(fileId, src);
+
+    const bytes = fs.readFileSync(src);
+    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
+
+    // ✅ Register fontkit BEFORE embedding any custom font (this was the error you saw)
+    try { doc.registerFontkit(fontkit); } catch (_) {}
+
+    // Try env font first (e.g., KozMin). Fallback to bundled Noto / Helvetica
+    let font;
+    try {
+      let fontBytes = null;
+      const pref = process.env.FONT_TTF_PATH || '';
+      if (pref && fs.existsSync(pref)) fontBytes = fs.readFileSync(pref);
+      else {
+        const tries = [
+          path.join(process.cwd(), 'fonts/NotoSerifCJKjp-Regular.otf'),
+          path.join(process.cwd(), 'fonts/NotoSansJP-Regular.ttf'),
+        ];
+        for (const t of tries) if (fs.existsSync(t)) { fontBytes = fs.readFileSync(t); break; }
+      }
+      font = fontBytes ? await doc.embedFont(fontBytes, { subset:false }) : await doc.embedFont('Helvetica');
+    } catch (_) {
+      font = await doc.embedFont('Helvetica');
+    }
+
+    const page = doc.getPages()[0];
+    page.drawText('VISIBLE OVERLAY TEST あいうえお 山田太郎', {
+      x: 48, y: 720, size: 14, font, color: rgb(0,0,0)
+    });
+
+    const outBytes = await doc.save({ useObjectStreams:false });
+    const out = path.join(TMP, `OVERLAY_${Date.now()}.pdf`);
+    fs.writeFileSync(out, outBytes);
+
+    const uploaded = await uploadToDrive(out, `OVERLAY_${Date.now()}.pdf`);
+    return res.json({ ok:true, link: uploaded.webViewLink });
+  } catch (e) {
+    return res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+// --- Main fill endpoint ---
 app.post('/fill', async (req, res) => {
   try {
     const { templateFileId, fields, outputName, folderId, mode, watermarkText } = req.body || {};
@@ -295,95 +359,13 @@ app.post('/fill', async (req, res) => {
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
     log('Uploaded to Drive:', uploaded);
 
-    res.json({
-      ok: true,
-      filledCount: result.filled,
-      driveFile: uploaded,
-    });
+    res.json({ ok: true, filledCount: result.filled, driveFile: uploaded });
   } catch (err) {
     log('ERROR /fill:', err && (err.stack || err));
     res.status(500).json({ error: 'Fill failed', detail: err.message });
   }
 });
 
-/* ===========================
-   DEBUG ROUTES (no Drive upload)
-   Stream PDFs back to the browser so we bypass Drive/memory issues
-   =========================== */
-
-// A) Passthrough: template → browser
-app.get('/debug/passthrough', async (req, res) => {
-  try {
-    const fileId = (req.query.fileId || '').trim();
-    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
-
-    const local = path.join(TMP, `pt_${fileId}.pdf`);
-    await downloadDriveFile(fileId, local);
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="PASSTHROUGH.pdf"');
-    return fs.createReadStream(local).pipe(res);
-  } catch (e) {
-    console.error('passthrough error:', e && (e.stack || e));
-    return res.status(500).json({ ok:false, error:e.message });
-  }
-});
-
-// B) Roundtrip via pdf-lib (no edits)
-app.get('/debug/roundtrip', async (req, res) => {
-  try {
-    const fileId = (req.query.fileId || '').trim();
-    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
-
-    const src = path.join(TMP, `rt_${fileId}.pdf`);
-    await downloadDriveFile(fileId, src);
-
-    const bytes = fs.readFileSync(src);
-    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
-    const outBytes = await doc.save({ useObjectStreams: false });
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="ROUNDTRIP.pdf"');
-    return res.end(outBytes);
-  } catch (e) {
-    console.error('roundtrip error:', e && (e.stack || e));
-    return res.status(500).json({ ok:false, error:e.message });
-  }
-});
-
-// C) Overlay visible text (prove drawing pipeline & font)
-app.get('/debug/overlay', async (req, res) => {
-  try {
-    const fileId = (req.query.fileId || '').trim();
-    if (!fileId) return res.status(400).json({ ok:false, error:'fileId required' });
-
-    const src = path.join(TMP, `ov_${fileId}.pdf`);
-    await downloadDriveFile(fileId, src);
-
-    const bytes = fs.readFileSync(src);
-    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
-
-    let font, fontBytes;
-    const pref = process.env.FONT_TTF_PATH || '';
-    if (pref && fs.existsSync(pref)) fontBytes = fs.readFileSync(pref);
-    if (fontBytes) font = await doc.embedFont(fontBytes, { subset:false });
-
-    const page = doc.getPages()[0];
-    page.drawText('VISIBLE OVERLAY TEST あいうえお 山田太郎', {
-      x: 48, y: 720, size: 16, font, color: rgb(0, 0, 0),
-    });
-
-    const outBytes = await doc.save({ useObjectStreams:false });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="OVERLAY.pdf"');
-    return res.end(outBytes);
-  } catch (e) {
-    console.error('overlay error:', e && (e.stack || e));
-    return res.status(500).json({ ok:false, error:e.message });
-  }
-});
-
-// ---- start server ----
 app.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
   log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
