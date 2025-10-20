@@ -25,35 +25,6 @@ function ensureDir(p) {
   if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
 
-/* ===== Yes/No 正規化 & 補助 ===== */
-function normJaEnYesNo(v) {
-  const s = String(v ?? '').trim().toLowerCase().normalize('NFKC');
-  if (['はい','yes','y','true','1','on'].includes(s)) return 'yes';
-  if (['いいえ','no','n','false','0','off'].includes(s)) return 'no';
-  return '';
-}
-const YES_SUFFIXES = ['_はい','_yes','-はい','-yes',' (はい)',' (yes)','_Yes','-Yes',' (Yes)'];
-const NO_SUFFIXES  = ['_いいえ','_no','-いいえ','-no',' (いいえ)',' (no)','_No','-No',' (No)'];
-
-function stripKnownSuffix(name) {
-  const nk = name.normalize('NFKC').toLowerCase();
-  for (const suf of YES_SUFFIXES) {
-    const s = suf.normalize('NFKC').toLowerCase();
-    if (nk.endsWith(s)) return { base: name.slice(0, name.length - suf.length), kind: 'yes', suffix: suf };
-  }
-  for (const suf of NO_SUFFIXES) {
-    const s = suf.normalize('NFKC').toLowerCase();
-    if (nk.endsWith(s)) return { base: name.slice(0, name.length - suf.length), kind: 'no', suffix: suf };
-  }
-  return { base: name, kind: '' };
-}
-function tryGetField(form, base, suffixes) {
-  for (const suf of suffixes) {
-    try { return form.getField(base + suf); } catch (_) {}
-  }
-  return null;
-}
-
 // ---------- Google Drive client ----------
 function getDriveClient() {
   let credentials = null;
@@ -96,10 +67,26 @@ async function uploadToDrive(localPath, name, parentId) {
   return res.data;
 }
 
+// ---------- helpers for flexible matching ----------
+function normLoose(s) {
+  // NFKC normalize, trim, collapse spaces, to lower, convert full-width alnum to half
+  const t = String(s ?? '').normalize('NFKC').trim().replace(/\s+/g, '').toLowerCase();
+  // Full-width alnum already normalized by NFKC in most cases; just return
+  return t;
+}
+function normYesNo(s) {
+  const n = normLoose(s);
+  if (n === 'はい' || n === 'yes' || n === 'true' || n === 'y' || n === '1' ) return 'yes';
+  if (n === 'いいえ' || n === 'no' || n === 'false' || n === 'n' || n === '0') return 'no';
+  return '';
+}
+
 // ---------- PDF fill ----------
 async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
-  const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
+  const pdfDoc = await PDFDocument.load(bytes, {
+    updateFieldAppearances: true, // we'll pass our font later
+  });
 
   // 1) Register fontkit (needed for custom fonts)
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
@@ -120,8 +107,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     try {
       if (p && fs.existsSync(p)) {
         const fontBytes = fs.readFileSync(p);
+        // Avoid subset for OTF/CFF fonts to prevent rare CFF subsetting issues
         const ext = path.extname(p).toLowerCase();
-        const allowSubset = ext !== '.otf'; // OTF(CFF) はsubsetting回避
+        const allowSubset = ext !== '.otf';
         customFont = await pdfDoc.embedFont(fontBytes, { subset: allowSubset });
         chosenFontPath = p;
         log('Embedded JP font:', p, '(subset:', allowSubset, ')');
@@ -136,13 +124,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     throw new Error('CJK font not embedded (FONT_TTF_PATH missing/unreadable). Cannot safely render Japanese text.');
   }
 
-  // 3) AcroForm defaults → our JP font
+  // 3) Make AcroForm defaults point to our JP font
   let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
   let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
   if (!acroForm) {
     acroForm = pdfDoc.context.obj({});
     pdfDoc.catalog.set(PDFName.of('AcroForm'), acroForm);
   }
+
   const dr = acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({});
   const drFont = dr.get(PDFName.of('Font')) || pdfDoc.context.obj({});
   drFont.set(PDFName.of('F0'), customFont.ref);
@@ -161,93 +150,73 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       const typeName = (fld && fld.constructor && fld.constructor.name) || '';
       const val = rawVal == null ? '' : String(rawVal);
 
-      // ---- Text ----
       if (typeName.includes('Text')) {
         fld.setText(val);
         try { fld.updateAppearances(customFont); } catch (_) {}
         filled++;
 
-      // ---- Radio / Checkbox（はい・いいえ完全対応）----
-      } else if (typeName.includes('Radio') || typeName.includes('Check')) {
-        const yn = normJaEnYesNo(val);
+      } else if (typeName.includes('Check')) {
+        const on = normLoose(val);
+        if (['true','yes','1','on','はい','チェック','有','あり'].includes(on)) fld.check();
+        else fld.uncheck();
+        filled++;
 
-        if (typeName.includes('Radio')) {
-          // まずそのまま
-          let ok = false;
-          try { fld.select(val); ok = true; filled++; } catch (_) {}
+      } else if (typeName.includes('Radio')) {
+        // ---- Robust radio selection ----
+        let ok = false;
 
-          if (!ok) {
-            const candidates = [val];
-            if (yn === 'yes') candidates.push('はい','Yes','yes','TRUE','true','1');
-            if (yn === 'no')  candidates.push('いいえ','No','no','FALSE','false','0');
-            for (const c of candidates) {
-              try { fld.select(String(c)); ok = true; filled++; break; } catch (_) {}
-            }
-          }
-        } else {
-          // チェックボックス
-          // 1) 名前末尾に *_はい / *_いいえ / *_yes / *_no が付いているかを判定
-          const info = stripKnownSuffix(name);
-          let handled = false;
+        // 1) try direct select with given value
+        try { fld.select(val); ok = true; filled++; } catch (_) {}
 
-          if (info.kind) {
-            // このフィールド自体が yes/no 片方を担っている
-            if (info.kind === 'yes') {
-              if (yn === 'yes') fld.check(); else fld.uncheck();
-              handled = true; filled++;
-            } else if (info.kind === 'no') {
-              if (yn === 'no') fld.check(); else fld.uncheck();
-              handled = true; filled++;
-            }
-          }
-
-          // 2) 相方（*_はい / *_いいえ 等）を探して両方制御
-          if (!handled) {
-            const base = info.base;
-            const yesField = tryGetField(form, base, YES_SUFFIXES);
-            const noField  = tryGetField(form, base, NO_SUFFIXES);
-
-            if (yesField || noField) {
-              if (yn === 'yes') {
-                try { yesField && yesField.check(); } catch(_) {}
-                try { noField && noField.uncheck(); } catch(_) {}
-                filled++;
-              } else if (yn === 'no') {
-                try { noField && noField.check(); } catch(_) {}
-                try { yesField && yesField.uncheck(); } catch(_) {}
-                filled++;
-              } else {
-                // 値が yes/no でない場合は何もしない（既定の状態を尊重）
+        // 2) try normalize & match against options
+        if (!ok) {
+          try {
+            const options = (fld.getOptions && Array.isArray(fld.getOptions())) ? fld.getOptions() : [];
+            const target = normLoose(val);
+            for (const opt of options) {
+              const optNorm = normLoose(opt);
+              if (optNorm === target) {
+                fld.select(opt);
+                ok = true; filled++;
+                break;
               }
-              handled = true;
             }
-          }
+          } catch (_) {}
+        }
 
-          // 3) それでも相方が見つからない＝単独チェックボックス
-          if (!handled) {
-            if (yn) {
-              if (yn === 'no') fld.check(); else fld.uncheck(); // No=チェック という運用に合わせる
-              filled++;
-            } else {
-              // 汎用トグル（true/1/on/はい/yes ならチェック）
-              const on = val.trim().toLowerCase().normalize('NFKC');
-              if (['true','1','on','はい','yes','y'].includes(on)) fld.check(); else fld.uncheck();
-              filled++;
-            }
+        // 3) last resort: treat as yes/no
+        if (!ok) {
+          const yn = normYesNo(val);
+          if (yn === 'yes') {
+            const candidates = ['はい','Yes','yes','true','1'];
+            for (const c of candidates) { try { fld.select(c); ok = true; filled++; break; } catch (_) {} }
+          } else if (yn === 'no') {
+            const candidates = ['いいえ','No','no','false','0'];
+            for (const c of candidates) { try { fld.select(c); ok = true; filled++; break; } catch (_) {} }
           }
         }
 
-      // ---- Dropdown ----
       } else if (typeName.includes('Dropdown')) {
-        try { fld.select(val); filled++; } catch (_) {}
+        // dropdown select
+        try {
+          fld.select(val); filled++;
+        } catch (_) {
+          // try normalized match among options
+          try {
+            const options = (fld.getOptions && Array.isArray(fld.getOptions())) ? fld.getOptions() : [];
+            const target = normLoose(val);
+            for (const opt of options) {
+              if (normLoose(opt) === target) { fld.select(opt); filled++; break; }
+            }
+          } catch (_) {}
+        }
       }
-
     } catch {
-      // unknown field name → 無視
+      // ignore unknown field names
     }
   }
 
-  // 5) Bulk rebuild appearances
+  // 5) Bulk rebuild appearances (ALWAYS pass the font!)
   try { form.updateFieldAppearances(customFont); } catch (_) {}
 
   // 6) Optional watermark
@@ -266,7 +235,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 7) Save with conservative options (size & compatibility)
+  // 7) Save with conservative options
   let outBytes;
   try {
     outBytes = await pdfDoc.save({
@@ -401,16 +370,19 @@ app.get('/debug/overlay', async (req, res) => {
     const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
     try { doc.registerFontkit(fontkit); } catch (_) {}
 
-    // same font as fillPdf
+    // Use same font source as fillPdf
     let fontBytes = null;
+    const pref = process.env.FONT_TTF_PATH;
     const candidates = [
-      process.env.FONT_TTF_PATH,
+      pref,
       path.join(ROOT, 'fonts/KozMinPr6N-Regular.otf'),
       path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),
       path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf'),
       path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
     ].filter(Boolean);
-    for (const p of candidates) { if (p && fs.existsSync(p)) { fontBytes = fs.readFileSync(p); break; } }
+    for (const p of candidates) {
+      if (p && fs.existsSync(p)) { fontBytes = fs.readFileSync(p); break; }
+    }
     const font = fontBytes ? await doc.embedFont(fontBytes, { subset: false }) : undefined;
 
     const page = doc.getPages()[0];
@@ -433,6 +405,6 @@ app.listen(PORT, () => {
   log(`Server listening on ${PORT}`);
   log(`OUTPUT_FOLDER_ID (fallback): ${OUTPUT_FOLDER_ID || '(none set)'}`);
   log(`Creds: ${process.env.GOOGLE_CREDENTIALS_JSON ? 'GOOGLE_CREDENTIALS_JSON'
-    : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATIONS_CREDENTIALS' : 'ADC/unknown')}`);
+    : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'GOOGLE_APPLICATION_CREDENTIALS' : 'ADC/unknown')}`);
   log(`FONT_TTF_PATH: ${process.env.FONT_TTF_PATH || '(none)'}`);
 });
