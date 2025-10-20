@@ -120,9 +120,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  if (!customFont) {
-    throw new Error('CJK font not embedded (FONT_TTF_PATH missing/unreadable). Cannot safely render Japanese text.');
-  }
+  if (!customFont) log('WARNING: No JP font embedded; CJK text may appear blank.');
 
   // 3) Make AcroForm defaults point to our JP font
   let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
