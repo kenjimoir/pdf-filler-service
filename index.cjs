@@ -183,7 +183,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   drFont.set(PDFName.of('F0'), customFont.ref);
   dr.set(PDFName.of('Font'), drFont);
   acroForm.set(PDFName.of('DR'), dr);
-  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
+  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 0 Tf 0 g'));
   acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
 
   // 3) fill (robust yes/no + alias)
