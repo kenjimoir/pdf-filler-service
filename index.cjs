@@ -186,7 +186,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   drFont.set(PDFName.of('F0'), customFont.ref);
   dr.set(PDFName.of('Font'), drFont);
   acroForm.set(PDFName.of('DR'), dr);
-  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 0 Tf 0 g'));
+  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
   acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
 
   // 3) fill (robust yes/no + alias)
@@ -196,6 +196,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   let filled = 0;
 
   for (const f of allFields) {
+    try { form.updateFieldAppearances(customFont); } catch (_) {}
     const name = f.getName ? f.getName() : '';
     const ctor = f.constructor && f.constructor.name || '';
     const valRaw = fields[name]; // exact-name match first
@@ -203,7 +204,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     // Text/Dropdown/Radio by exact key
     if (ctor.includes('Text')) {
       if (valRaw != null) {
-        f.setText(String(valRaw));  // 見た目は再生成しない＝テンプレの自動縮小が生きる
+        f.setText(String(valRaw));
+        try { f.updateAppearances(customFont); } catch (_) {}
         filled++;
       }
       continue;
