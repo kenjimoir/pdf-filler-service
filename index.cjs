@@ -1,6 +1,5 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
 // deps: express, cors, pdf-lib, googleapis, @pdf-lib/fontkit
-// runs on Render (uses process.env.PORT) and writes temp files in os.tmpdir()
 
 const fs = require('fs');
 const os = require('os');
@@ -18,12 +17,8 @@ const ROOT = process.cwd();
 
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
-function log(...args) {
-  console.log(new Date().toISOString(), '-', ...args);
-}
-function ensureDir(p) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
+function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
+function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 
 // ---------- Google Drive client ----------
 function getDriveClient() {
@@ -53,6 +48,7 @@ async function downloadDriveFile(fileId, destPath) {
   });
   return destPath;
 }
+
 async function uploadToDrive(localPath, name, parentId) {
   const drive = getDriveClient();
   const parents = parentId ? [parentId] : (OUTPUT_FOLDER_ID ? [OUTPUT_FOLDER_ID] : undefined);
@@ -72,30 +68,25 @@ async function uploadToDrive(localPath, name, parentId) {
 function stripWeird(s) {
   if (s == null) return '';
   let t = String(s);
-  // remove ASCII quotes, Japanese quotes, zero-width etc, and trim
-  t = t
-    .replace(/[\u200B-\u200D\uFEFF]/g, '')        // zero-width
-    .replace(/[“”„‟〝〞＂"]/g, '')                 // various double quotes
-    .replace(/[‘’‚‛′＇']/g, '')                   // various single quotes
+  return t
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[“”„‟〝〞＂"]/g, '')
+    .replace(/[‘’‚‛′＇']/g, '')
     .replace(/\s+/g, ' ')
     .trim();
-  return t;
 }
 function normalizeYesNo(vRaw) {
   const v = stripWeird(vRaw).toLowerCase();
   if (!v) return '';
   if (['yes','true','1','on'].includes(v) || v === 'はい') return 'yes';
   if (['no','false','0','off'].includes(v) || v === 'いいえ') return 'no';
-  // allow first char match (は / い) as last resort
   if (v.startsWith('は')) return 'yes';
   if (v.startsWith('い')) return 'no';
-  return v; // return as-is; caller will compare further if needed
+  return v;
 }
-
 function normalizeRegion(vRaw) {
   const v = stripWeird(vRaw);
   const t = v.toLowerCase();
-  // map English to Japanese labels you use on the PDF
   const map = {
     'asia': 'アジア',
     'europe': 'ヨーロッパ',
@@ -107,14 +98,13 @@ function normalizeRegion(vRaw) {
     'middle east': '中東',
     'other': 'その他',
   };
-  return map[t] || v; // if already Japanese, just return
+  return map[t] || v;
 }
 
 // map possible incoming keys → logical base keys used for _yes/_no pairs
 function buildAliasView(fieldsIn) {
   const f = fieldsIn || {};
   const out = { ...f };
-
   const aliasPairs = [
     ['TreatmentNow', 'Q1_TreatmentNow'],
     ['SeriousHistory', 'Q2_SeriousHistory'],
@@ -126,12 +116,9 @@ function buildAliasView(fieldsIn) {
   for (const [base, alt] of aliasPairs) {
     if (out[base] == null && out[alt] != null) out[base] = out[alt];
   }
-
-  // DestinationRegion: we keep both (Q5_* is your GAS key)
   if (out['DestinationRegion'] == null && out['Q5_DestinationRegion'] != null) {
     out['DestinationRegion'] = out['Q5_DestinationRegion'];
   }
-
   return out;
 }
 
@@ -139,9 +126,7 @@ function buildAliasView(fieldsIn) {
 
 async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
-  const pdfDoc = await PDFDocument.load(bytes, {
-    updateFieldAppearances: false,
-  });
+  const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
 
   // 1) font
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
@@ -154,15 +139,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf'),
     path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
   ].filter(Boolean);
+
   for (const p of fontCandidates) {
     try {
       if (p && fs.existsSync(p)) {
         const fontBytes = fs.readFileSync(p);
         const ext = path.extname(p).toLowerCase();
-
-        // ✅ Only subset for TTFs (safe). Disable subsetting for OTFs to stop the crash.
-        const allowSubset = ext !== '.otf';
-
+        const allowSubset = ext !== '.otf'; // subset only TTFs
         customFont = await pdfDoc.embedFont(fontBytes, { subset: allowSubset });
         chosenFontPath = p;
         log('Embedded JP font:', p, '(subset:', allowSubset, ')');
@@ -196,12 +179,10 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   let filled = 0;
 
   for (const f of allFields) {
-    try { form.updateFieldAppearances(customFont); } catch (_) {}
     const name = f.getName ? f.getName() : '';
     const ctor = f.constructor && f.constructor.name || '';
-    const valRaw = fields[name]; // exact-name match first
+    const valRaw = fields[name];
 
-    // Text/Dropdown/Radio by exact key
     if (ctor.includes('Text')) {
       if (valRaw != null) {
         f.setText(String(valRaw));
@@ -223,11 +204,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       continue;
     }
 
-    // Checkboxes: 3パターン
     if (ctor.includes('Check')) {
       const n = String(name);
 
-      // 3-1) ペア方式: Foo_yes / Foo_no
       const m = n.match(/^(.*)_(yes|no)$/i);
       if (m) {
         const base = m[1];
@@ -239,13 +218,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           else f.uncheck();
           filled++;
         } else {
-          // no info -> uncheck to be safe
           f.uncheck();
         }
         continue;
       }
 
-      // 3-2) DestinationRegion_アジア のような単項目一致  ← (reverted as requested)
       const rm = n.match(/^DestinationRegion_(.+)$/);
       if (rm) {
         const want = stripWeird(rm[1]);
@@ -255,7 +232,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         continue;
       }
 
-      // 3-3) 単独の yes/no キー（フィールド名そのものが Foo で、値が yes/no）
       if (valueBy[n] != null) {
         const yn = normalizeYesNo(valueBy[n]);
         if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
@@ -263,10 +239,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         filled++;
         continue;
       }
-
-      // それ以外は扱わない（名寄せできない）
     }
   }
+
+  // Final: regenerate once after all updates
+  try { form.updateFieldAppearances(customFont); } catch (_) {}
 
   // 5) watermark
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
@@ -282,6 +259,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         color: rgb(0.85, 0.1, 0.1)
       });
     }
+  }
+
+  // 5.5) optional flatten
+  if (opts.flatten) {
+    try { form.flatten(); } catch (_) {}
   }
 
   // 6) save
@@ -358,7 +340,6 @@ app.post('/fill', async (req, res) => {
     const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
     const outPath = path.join(TMP, outName);
 
-    // debug: log the exact incoming values after normalization
     const aliasView = buildAliasView(fields || {});
     const probe = {};
     for (const k of ['TreatmentNow','SeriousHistory','LuggageClaims5Plus','DuplicateContracts','SanctionedCountries','WorkDuringTravel','DestinationRegion']) {
@@ -367,7 +348,12 @@ app.post('/fill', async (req, res) => {
     log('INCOMING (probe):', JSON.stringify(probe));
 
     const wm = watermarkText || (mode === 'review' ? '確認用 / DRAFT' : '');
-    const result = await fillPdf(tmpTemplate, outPath, fields || {}, { watermarkText: wm });
+    const result = await fillPdf(
+      tmpTemplate,
+      outPath,
+      fields || {},
+      { watermarkText: wm, flatten: mode !== 'review' }
+    );
     log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
 
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
