@@ -140,7 +140,7 @@ function buildAliasView(fieldsIn) {
 async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, {
-    updateFieldAppearances: true,
+    updateFieldAppearances: false,
   });
 
   // 1) font
