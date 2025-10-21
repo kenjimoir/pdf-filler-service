@@ -67,18 +67,79 @@ async function uploadToDrive(localPath, name, parentId) {
   return res.data;
 }
 
-// ---------- helpers for flexible matching ----------
-function normLoose(s) {
-  // NFKC normalize, trim, collapse spaces, to lower, convert full-width alnum to half
-  const t = String(s ?? '').normalize('NFKC').trim().replace(/\s+/g, '').toLowerCase();
-  // Full-width alnum already normalized by NFKC in most cases; just return
-  return t;
+// ---------- helpers for robust Yes/No & region mapping ----------
+function norm(s) {
+  return String(s || '').trim().toLowerCase().replace(/[ \t\u3000]/g, '');
 }
-function normYesNo(s) {
-  const n = normLoose(s);
-  if (n === 'はい' || n === 'yes' || n === 'true' || n === 'y' || n === '1' ) return 'yes';
-  if (n === 'いいえ' || n === 'no' || n === 'false' || n === 'n' || n === '0') return 'no';
-  return '';
+function mapYesNo(v) {
+  const n = norm(v);
+  if (['はい','yes','true','1','on','可','有','あり','する'].some(k=>n.includes(k))) return 'はい';
+  if (['いいえ','no','false','0','off','不可','無','なし','しない'].some(k=>n.includes(k))) return 'いいえ';
+  return v;
+}
+function mapRegion(v) {
+  const n = norm(v);
+  if (['asia','ａｓｉａ','アジア'].some(k=>n.includes(k))) return 'アジア';
+  if (['europe','ヨーロッパ','欧州'].some(k=>n.includes(k))) return 'ヨーロッパ';
+  if (['oceania','オセアニア'].some(k=>n.includes(k))) return 'オセアニア';
+  if (['northamerica','北米'].some(k=>n.includes(k))) return '北米';
+  if (['latin','south','中南米','南米'].some(k=>n.includes(k))) return '中南米';
+  if (['africa','アフリカ'].some(k=>n.includes(k))) return 'アフリカ';
+  if (['middleeast','中東'].some(k=>n.includes(k))) return '中東';
+  if (['other','その他','そのた'].some(k=>n.includes(k))) return 'その他';
+  return v;
+}
+function selectRadioSafe(radio, wanted) {
+  // 可能なら選択肢を取得してマッチング
+  let opts = [];
+  try { opts = (radio.getOptions && radio.getOptions()) ? radio.getOptions().map(String) : []; } catch {}
+  const trySelect = (val) => { try { radio.select(val); return true; } catch { return false; } };
+
+  // オプションが取れない場合はそのまま試す
+  if (!opts.length) {
+    const yn = mapYesNo(wanted);
+    const reg = mapRegion(wanted);
+    return trySelect(wanted) || trySelect(yn) || trySelect(reg);
+  }
+
+  // 完全一致
+  if (opts.includes(wanted)) return trySelect(wanted);
+
+  // はい/いいえ
+  const yn = mapYesNo(wanted);
+  if (opts.includes(yn)) return trySelect(yn);
+  const yes = opts.find(o => /^(はい|yes)$/i.test(String(o)));
+  const no  = opts.find(o => /^(いいえ|no)$/i.test(String(o)));
+  if (yn === 'はい' && yes) return trySelect(yes);
+  if (yn === 'いいえ' && no)  return trySelect(no);
+
+  // 渡航先
+  const reg = mapRegion(wanted);
+  if (opts.includes(reg)) return trySelect(reg);
+
+  // 部分一致のフォールバック（めったに使わない）
+  const hit = opts.find(o => norm(o) === norm(yn) || norm(o) === norm(reg));
+  if (hit) return trySelect(hit);
+
+  return false;
+}
+function setCheckBoxByAnswer(cb, answer) {
+  // 書き出し値（On 値）を読めるなら読む
+  const acro = cb.acroField || cb._acroField || cb['acroField'];
+  let onName = null;
+  try {
+    const n = acro && acro.getOnValue && acro.getOnValue();
+    onName = n ? String(n) : null;
+  } catch {}
+  const yn = mapYesNo(answer);
+  if (onName) {
+    if (/^(はい|yes)$/i.test(onName)) { yn === 'はい' ? cb.check() : cb.uncheck(); return true; }
+    if (/^(いいえ|no)$/i.test(onName)) { yn === 'いいえ' ? cb.check() : cb.uncheck(); return true; }
+    // onName が別値なら、truthy でON
+  }
+  if (['はい','yes','true','1','on'].includes(norm(answer))) cb.check();
+  else cb.uncheck();
+  return true;
 }
 
 // ---------- PDF fill ----------
@@ -120,9 +181,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  if (!customFont) log('WARNING: No JP font embedded; CJK text may appear blank.');
+  // Abort early if we have no CJK-capable font
+  if (!customFont) {
+    throw new Error('CJK font not embedded (FONT_TTF_PATH missing/unreadable). Cannot safely render Japanese text.');
+  }
 
-  // 3) Make AcroForm defaults point to our JP font
+  // 3) Make AcroForm defaults point to our JP font so any field that
+  //    relies on defaults uses it (prevents WinAnsi fallback).
   let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
   let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
   if (!acroForm) {
@@ -135,13 +200,15 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   drFont.set(PDFName.of('F0'), customFont.ref);
   dr.set(PDFName.of('Font'), drFont);
   acroForm.set(PDFName.of('DR'), dr);
+
+  // DA: use F0 (our font), 10pt, black
   acroForm.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
+  // Some viewers still respect this flag
   acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
 
   // 4) Fill fields
   const form = pdfDoc.getForm();
   let filled = 0;
-
   for (const [name, rawVal] of Object.entries(fields || {})) {
     try {
       const fld = form.getField(String(name));
@@ -149,73 +216,31 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       const val = rawVal == null ? '' : String(rawVal);
 
       if (typeName.includes('Text')) {
+        // Set value
         fld.setText(val);
-        try { fld.updateAppearances(customFont); } catch (_) {}
+        // Rebuild this field’s appearance using our JP font (prevents WinAnsi fallback)
+        try { fld.updateAppearances(customFont); } catch {}
         filled++;
 
       } else if (typeName.includes('Check')) {
-        const on = normLoose(val);
-        if (['true','yes','1','on','はい','チェック','有','あり'].includes(on)) fld.check();
-        else fld.uncheck();
+        setCheckBoxByAnswer(fld, val);
         filled++;
 
       } else if (typeName.includes('Radio')) {
-        // ---- Robust radio selection ----
-        let ok = false;
-
-        // 1) try direct select with given value
-        try { fld.select(val); ok = true; filled++; } catch (_) {}
-
-        // 2) try normalize & match against options
-        if (!ok) {
-          try {
-            const options = (fld.getOptions && Array.isArray(fld.getOptions())) ? fld.getOptions() : [];
-            const target = normLoose(val);
-            for (const opt of options) {
-              const optNorm = normLoose(opt);
-              if (optNorm === target) {
-                fld.select(opt);
-                ok = true; filled++;
-                break;
-              }
-            }
-          } catch (_) {}
-        }
-
-        // 3) last resort: treat as yes/no
-        if (!ok) {
-          const yn = normYesNo(val);
-          if (yn === 'yes') {
-            const candidates = ['はい','Yes','yes','true','1'];
-            for (const c of candidates) { try { fld.select(c); ok = true; filled++; break; } catch (_) {} }
-          } else if (yn === 'no') {
-            const candidates = ['いいえ','No','no','false','0'];
-            for (const c of candidates) { try { fld.select(c); ok = true; filled++; break; } catch (_) {} }
-          }
-        }
+        const ok = selectRadioSafe(fld, val);
+        if (ok) filled++;
 
       } else if (typeName.includes('Dropdown')) {
-        // dropdown select
-        try {
-          fld.select(val); filled++;
-        } catch (_) {
-          // try normalized match among options
-          try {
-            const options = (fld.getOptions && Array.isArray(fld.getOptions())) ? fld.getOptions() : [];
-            const target = normLoose(val);
-            for (const opt of options) {
-              if (normLoose(opt) === target) { fld.select(opt); filled++; break; }
-            }
-          } catch (_) {}
-        }
+        try { fld.select(val); filled++; } catch {}
       }
-    } catch {
+
+    } catch (e) {
       // ignore unknown field names
     }
   }
 
   // 5) Bulk rebuild appearances (ALWAYS pass the font!)
-  try { form.updateFieldAppearances(customFont); } catch (_) {}
+  try { form.updateFieldAppearances(customFont); } catch {}
 
   // 6) Optional watermark
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
@@ -233,13 +258,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 7) Save with conservative options
+  // 7) Save with conservative options for compatibility/smaller size
   let outBytes;
   try {
     outBytes = await pdfDoc.save({
-      useObjectStreams: false,
+      useObjectStreams: false,        // improves viewer compatibility
       addDefaultPage: false,
-      updateFieldAppearances: false,
+      updateFieldAppearances: false,  // we already rebuilt with the font
     });
   } catch (e) {
     log('pdfDoc.save() failed, retrying with minimal options:', e.message);
