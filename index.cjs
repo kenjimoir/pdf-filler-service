@@ -67,101 +67,99 @@ async function uploadToDrive(localPath, name, parentId) {
   return res.data;
 }
 
-// ---------- Helpers for form logic ----------
-function norm(s) {
-  return String(s == null ? '' : s).trim();
-}
-function yn(s) {
-  const v = norm(s).toLowerCase();
-  if (['true', 'yes', 'y', '1', 'on'].includes(v)) return 'yes';
-  if (['false', 'no', 'n', '0', 'off'].includes(v)) return 'no';
-  if (v === 'はい') return 'yes';
-  if (v === 'いいえ') return 'no';
-  return v; // それ以外はそのまま返す（場所など）
-}
+/* ---------------- helpers: normalization & alias ---------------- */
 
-// base_yes/base_no の両方がテンプレにあるとき、回答（yes/no）で片方をcheck・片方をuncheck
-function applyYesNoPair(form, base, answer) {
-  const yesName = `${base}_yes`;
-  const noName  = `${base}_no`;
-  const ans = yn(answer);
-  let touched = 0;
-  try {
-    const fYes = form.getFieldMaybe ? form.getFieldMaybe(yesName) : null;
-    const fNo  = form.getFieldMaybe ? form.getFieldMaybe(noName)  : null;
-    if (!fYes && !fNo) return 0;
-
-    if (ans === 'yes') {
-      if (fYes && fYes.check) { fYes.check(); touched++; }
-      if (fNo  && fNo.uncheck) { fNo.uncheck(); }
-    } else if (ans === 'no') {
-      if (fNo && fNo.check) { fNo.check(); touched++; }
-      if (fYes && fYes.uncheck) { fYes.uncheck(); }
-    }
-    return touched;
-  } catch { return 0; }
+function stripWeird(s) {
+  if (s == null) return '';
+  let t = String(s);
+  // remove ASCII quotes, Japanese quotes, zero-width etc, and trim
+  t = t
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')        // zero-width
+    .replace(/[“”„‟〝〞＂"]/g, '')                 // various double quotes
+    .replace(/[‘’‚‛′＇']/g, '')                   // various single quotes
+    .replace(/\s+/g, ' ')
+    .trim();
+  return t;
+}
+function normalizeYesNo(vRaw) {
+  const v = stripWeird(vRaw).toLowerCase();
+  if (!v) return '';
+  if (['yes','true','1','on'].includes(v) || v === 'はい') return 'yes';
+  if (['no','false','0','off'].includes(v) || v === 'いいえ') return 'no';
+  // allow first char match (は / い) as last resort
+  if (v.startsWith('は')) return 'yes';
+  if (v.startsWith('い')) return 'no';
+  return v; // return as-is; caller will compare further if needed
 }
 
-// 単一選択だがテンプレ側が「Base_アジア」「Base_北米」…のように複数 CheckBox で表現されている場合
-// → payload の { Base: 'アジア' } で Base_アジア に check、同じBase_前方一致の他は uncheck
-function applySingleChoiceBySuffix(form, base, value) {
-  const target = `${base}_${norm(value)}`;
-  let touched = 0;
-  try {
-    // form.getFields() から該当 prefix を拾って制御
-    const all = form.getFields();
-    const rel = all.filter(f => {
-      const name = String(f.getName ? f.getName() : '');
-      return name === target || name.startsWith(`${base}_`);
-    });
-    if (!rel.length) return 0;
-    for (const f of rel) {
-      const name = String(f.getName ? f.getName() : '');
-      if (name === target) { f.check && f.check(); touched++; }
-      else { f.uncheck && f.uncheck(); }
-    }
-    return touched;
-  } catch { return 0; }
+function normalizeRegion(vRaw) {
+  const v = stripWeird(vRaw);
+  const t = v.toLowerCase();
+  // map English to Japanese labels you use on the PDF
+  const map = {
+    'asia': 'アジア',
+    'europe': 'ヨーロッパ',
+    'oceania': 'オセアニア',
+    'north america': '北米',
+    'south america': '中南米',
+    'latin america': '中南米',
+    'africa': 'アフリカ',
+    'middle east': '中東',
+    'other': 'その他',
+  };
+  return map[t] || v; // if already Japanese, just return
 }
 
-// pdf-lib のフォームに安全にアクセスするユーティリティ
-function augmentForm(form) {
-  if (!form.getFieldMaybe) {
-    form.getFieldMaybe = function(name) {
-      try { return this.getField(String(name)); } catch { return null; }
-    };
+// map possible incoming keys → logical base keys used for _yes/_no pairs
+function buildAliasView(fieldsIn) {
+  const f = fieldsIn || {};
+  const out = { ...f };
+
+  const aliasPairs = [
+    ['TreatmentNow', 'Q1_TreatmentNow'],
+    ['SeriousHistory', 'Q2_SeriousHistory'],
+    ['LuggageClaims5Plus', 'Q3_LuggageClaims5Plus'],
+    ['DuplicateContracts', 'Q4_DuplicateContracts'],
+    ['SanctionedCountries', 'Q6_SanctionedCountries'],
+    ['WorkDuringTravel', 'Q7_JobDuringTravel'],
+  ];
+  for (const [base, alt] of aliasPairs) {
+    if (out[base] == null && out[alt] != null) out[base] = out[alt];
   }
-  return form;
+
+  // DestinationRegion: we keep both (Q5_* is your GAS key)
+  if (out['DestinationRegion'] == null && out['Q5_DestinationRegion'] != null) {
+    out['DestinationRegion'] = out['Q5_DestinationRegion'];
+  }
+
+  return out;
 }
 
-// ---------- PDF fill ----------
+/* ---------------- PDF fill core ---------------- */
+
 async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, {
     updateFieldAppearances: true,
   });
 
-  // 1) Register fontkit
+  // 1) font
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
-
-  // 2) Embed a Japanese font (KozMin or Noto fallbacks)
   let customFont = null;
   let chosenFontPath = null;
-
   const fontCandidates = [
-    process.env.FONT_TTF_PATH, // e.g., fonts/KozMinPr6N-Regular.otf
+    process.env.FONT_TTF_PATH,
     path.join(ROOT, 'fonts/KozMinPr6N-Regular.otf'),
     path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),
     path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf'),
     path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
   ].filter(Boolean);
-
   for (const p of fontCandidates) {
     try {
       if (p && fs.existsSync(p)) {
         const fontBytes = fs.readFileSync(p);
         const ext = path.extname(p).toLowerCase();
-        const allowSubset = ext !== '.otf'; // OTF(CFF)は無サブセット安定運用
+        const allowSubset = ext !== '.otf';
         customFont = await pdfDoc.embedFont(fontBytes, { subset: allowSubset });
         chosenFontPath = p;
         log('Embedded JP font:', p, '(subset:', allowSubset, ')');
@@ -171,11 +169,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log('Font embed failed for', p, e && e.message);
     }
   }
-  if (!customFont) {
-    throw new Error('CJK font not embedded (FONT_TTF_PATH missing/unreadable).');
-  }
+  if (!customFont) throw new Error('CJK font not embedded. Set FONT_TTF_PATH.');
 
-  // 3) AcroForm defaults → F0 に我々のフォント
+  // 2) AcroForm default appearance
   let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
   let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
   if (!acroForm) {
@@ -190,68 +186,88 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   acroForm.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
   acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
 
-  // 4) Fill fields
-  const form = augmentForm(pdfDoc.getForm());
+  // 3) fill (robust yes/no + alias)
+  const form = pdfDoc.getForm();
+  const allFields = form.getFields();
+  const valueBy = buildAliasView(fields);
   let filled = 0;
 
-  // 4-1) まず Yes/No の基底回答（例: { TreatmentNow: 'yes' }）を見て base_yes/base_no を処理
-  for (const [rawKey, rawVal] of Object.entries(fields || {})) {
-    const key = String(rawKey);
-    const val = norm(rawVal);
-    const ynVal = yn(val);
+  for (const f of allFields) {
+    const name = f.getName ? f.getName() : '';
+    const ctor = f.constructor && f.constructor.name || '';
+    const valRaw = fields[name]; // exact-name match first
 
-    // Base 回答での yes/no ペア処理
-    if (ynVal === 'yes' || ynVal === 'no') {
-      filled += applyYesNoPair(form, key, ynVal);
-    }
-
-    // 単一選択チェック群（Destination のように Base_value で置いてあるケース）
-    // フィールド名が Base だけで、値が「アジア」などのときに Base_アジア を check する
-    if (!key.includes('_') && val) {
-      filled += applySingleChoiceBySuffix(form, key, val);
-    }
-  }
-
-  // 4-2) 通常の “フィールド名 → 値” 直指定（テキスト / ドロップダウン / ラジオ個別 / チェック個別）
-  for (const [rawKey, rawVal] of Object.entries(fields || {})) {
-    const name = String(rawKey);
-    const value = norm(rawVal);
-
-    try {
-      const fld = form.getFieldMaybe(name);
-      if (!fld) continue;
-      const typeName = (fld && fld.constructor && fld.constructor.name) || '';
-
-      if (typeName.includes('Text')) {
-        fld.setText(value);
-        try { fld.updateAppearances(customFont); } catch (_) {}
+    // Text/Dropdown/Radio by exact key
+    if (ctor.includes('Text')) {
+      if (valRaw != null) {
+        f.setText(String(valRaw));
+        try { f.updateAppearances(customFont); } catch (_) {}
         filled++;
-      } else if (typeName.includes('Dropdown')) {
-        try { fld.select(value); filled++; } catch (_) {}
-      } else if (typeName.includes('Radio')) {
-        // ラジオは select(ExportValue) で選択。日本語/英語の yes/no も受ける
-        const v = yn(value);
-        try { fld.select(v || value); filled++; } catch (_) {}
-      } else if (typeName.includes('Check')) {
-        // CheckBox は on/off しかないので、yes/true系で check
-        const v = yn(value);
-        if (['yes', 'true', '1', 'on'].includes(v)) { fld.check(); filled++; }
-        else if (['no', 'false', '0', 'off'].includes(v)) { fld.uncheck(); }
-        else {
-          // 値を直接一致させる型はないため、個別チェック名に対して “存在すれば check”
-          // （例: Destination_アジア: 'アジア' と送る運用は上の applySingleChoiceBySuffix で賄う）
-          fld.check && fld.check(); filled++;
-        }
       }
-    } catch {
-      // ignore unknown field names
+      continue;
+    }
+    if (ctor.includes('Dropdown')) {
+      if (valRaw != null) {
+        try { f.select(String(valRaw)); filled++; } catch (_) {}
+      }
+      continue;
+    }
+    if (ctor.includes('Radio')) {
+      if (valRaw != null) {
+        try { f.select(String(valRaw)); filled++; } catch (_) {}
+      }
+      continue;
+    }
+
+    // Checkboxes: 3パターン
+    if (ctor.includes('Check')) {
+      const n = String(name);
+
+      // 3-1) ペア方式: Foo_yes / Foo_no
+      const m = n.match(/^(.*)_(yes|no)$/i);
+      if (m) {
+        const base = m[1];
+        const isYesBox = m[2].toLowerCase() === 'yes';
+        const baseVal = valueBy[base];
+        if (baseVal != null) {
+          const yn = normalizeYesNo(baseVal);
+          if ((isYesBox && yn === 'yes') || (!isYesBox && yn === 'no')) f.check();
+          else f.uncheck();
+          filled++;
+        } else {
+          // no info -> uncheck to be safe
+          f.uncheck();
+        }
+        continue;
+      }
+
+      // 3-2) Region_アジア のような単項目一致
+      const rm = n.match(/^Region_(.+)$/);
+      if (rm) {
+        const want = stripWeird(rm[1]);
+        const given = normalizeRegion(valueBy['DestinationRegion'] || '');
+        if (want && given && want === given) f.check(); else f.uncheck();
+        filled++;
+        continue;
+      }
+
+      // 3-3) 単独の yes/no キー（フィールド名そのものが Foo で、値が yes/no）
+      if (valueBy[n] != null) {
+        const yn = normalizeYesNo(valueBy[n]);
+        if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
+        else f.uncheck();
+        filled++;
+        continue;
+      }
+
+      // それ以外は扱わない（名寄せできない）
     }
   }
 
-  // 5) Bulk rebuild appearances (ALWAYS pass the font!)
+  // 4) rebuild appearances
   try { form.updateFieldAppearances(customFont); } catch (_) {}
 
-  // 6) Optional watermark
+  // 5) watermark
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
   if (wmText) {
     for (const page of pdfDoc.getPages()) {
@@ -267,7 +283,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 7) Save
+  // 6) save
   let outBytes;
   try {
     outBytes = await pdfDoc.save({
@@ -276,7 +292,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       updateFieldAppearances: false,
     });
   } catch (e) {
-    log('pdfDoc.save() failed, retrying with minimal options:', e.message);
+    log('pdfDoc.save() failed, retry with defaults:', e.message);
     outBytes = await pdfDoc.save();
   }
 
@@ -284,7 +300,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   return { outPath, filled, size: outBytes.length, fontPath: chosenFontPath };
 }
 
-// ---------- HTTP server ----------
+/* ---------------- HTTP server ---------------- */
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -340,6 +357,14 @@ app.post('/fill', async (req, res) => {
     const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
     const outPath = path.join(TMP, outName);
 
+    // debug: log the exact incoming values after normalization
+    const aliasView = buildAliasView(fields || {});
+    const probe = {};
+    for (const k of ['TreatmentNow','SeriousHistory','LuggageClaims5Plus','DuplicateContracts','SanctionedCountries','WorkDuringTravel','DestinationRegion']) {
+      if (aliasView[k] != null) probe[k] = stripWeird(aliasView[k]);
+    }
+    log('INCOMING (probe):', JSON.stringify(probe));
+
     const wm = watermarkText || (mode === 'review' ? '確認用 / DRAFT' : '');
     const result = await fillPdf(tmpTemplate, outPath, fields || {}, { watermarkText: wm });
     log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
@@ -354,7 +379,8 @@ app.post('/fill', async (req, res) => {
   }
 });
 
-// ---------- Debug endpoints ----------
+/* ---------------- Debug endpoints (unchanged) ---------------- */
+
 app.get('/debug/passthrough', async (req, res) => {
   try {
     const fileId = (req.query.fileId || '').trim();
