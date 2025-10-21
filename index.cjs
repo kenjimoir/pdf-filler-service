@@ -413,6 +413,17 @@ app.post('/fill', async (req, res) => {
 
     const tmpTemplate = path.join(TMP, `template_${templateFileId}.pdf`);
     await downloadDriveFile(templateFileId, tmpTemplate);
+    
+        // 🔍 DEBUG: log all field keys and values received from GAS
+    log('===== FULL FIELD MAP RECEIVED FROM GAS =====');
+    if (fields && typeof fields === 'object') {
+      Object.entries(fields).forEach(([k, v]) => {
+        log(`${k}: ${JSON.stringify(v)}`);
+      });
+      log('===== END FIELD MAP =====');
+    } else {
+      log('⚠️ No fields object received or not an object:', typeof fields);
+    }
 
     const base = (outputName && String(outputName).trim()) || `filled_${Date.now()}`;
     const outName = base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`;
