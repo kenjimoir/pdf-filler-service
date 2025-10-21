@@ -159,7 +159,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       if (p && fs.existsSync(p)) {
         const fontBytes = fs.readFileSync(p);
         const ext = path.extname(p).toLowerCase();
-        const allowSubset = ext !== '.otf';
+        const allowSubset = true;
         customFont = await pdfDoc.embedFont(fontBytes, { subset: allowSubset });
         chosenFontPath = p;
         log('Embedded JP font:', p, '(subset:', allowSubset, ')');
