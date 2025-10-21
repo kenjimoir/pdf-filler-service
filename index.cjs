@@ -1,5 +1,6 @@
 // index.cjs — PDF fill → upload to Drive (Shared Drives OK)
 // deps: express, cors, pdf-lib, googleapis, @pdf-lib/fontkit
+// runs on Render (uses process.env.PORT) and writes temp files in os.tmpdir()
 
 const fs = require('fs');
 const os = require('os');
@@ -17,8 +18,12 @@ const ROOT = process.cwd();
 
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
-function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
-function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
+function log(...args) {
+  console.log(new Date().toISOString(), '-', ...args);
+}
+function ensureDir(p) {
+  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
+}
 
 // ---------- Google Drive client ----------
 function getDriveClient() {
@@ -48,7 +53,6 @@ async function downloadDriveFile(fileId, destPath) {
   });
   return destPath;
 }
-
 async function uploadToDrive(localPath, name, parentId) {
   const drive = getDriveClient();
   const parents = parentId ? [parentId] : (OUTPUT_FOLDER_ID ? [OUTPUT_FOLDER_ID] : undefined);
@@ -88,20 +92,13 @@ function normalizeRegion(vRaw) {
   const v = stripWeird(vRaw);
   const t = v.toLowerCase();
   const map = {
-    'asia': 'アジア',
-    'europe': 'ヨーロッパ',
-    'oceania': 'オセアニア',
-    'north america': '北米',
-    'south america': '中南米',
-    'latin america': '中南米',
-    'africa': 'アフリカ',
-    'middle east': '中東',
-    'other': 'その他',
+    'asia': 'アジア','europe': 'ヨーロッパ','oceania': 'オセアニア',
+    'north america': '北米','south america': '中南米','latin america': '中南米',
+    'africa': 'アフリカ','middle east': '中東','other': 'その他',
   };
   return map[t] || v;
 }
 
-// map possible incoming keys → logical base keys used for _yes/_no pairs
 function buildAliasView(fieldsIn) {
   const f = fieldsIn || {};
   const out = { ...f };
@@ -128,8 +125,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
 
-  // 1) font
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
+
   let customFont = null;
   let chosenFontPath = null;
   const fontCandidates = [
@@ -145,7 +142,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       if (p && fs.existsSync(p)) {
         const fontBytes = fs.readFileSync(p);
         const ext = path.extname(p).toLowerCase();
-        const allowSubset = ext !== '.otf'; // subset only TTFs
+        const allowSubset = ext !== '.otf';
         customFont = await pdfDoc.embedFont(fontBytes, { subset: allowSubset });
         chosenFontPath = p;
         log('Embedded JP font:', p, '(subset:', allowSubset, ')');
@@ -157,7 +154,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   }
   if (!customFont) throw new Error('CJK font not embedded. Set FONT_TTF_PATH.');
 
-  // 2) AcroForm default appearance
+  // --- Set global AcroForm defaults ---
   let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
   let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
   if (!acroForm) {
@@ -172,11 +169,16 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
   acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
 
-  // 3) fill (robust yes/no + alias)
+  // --- Fill logic ---
   const form = pdfDoc.getForm();
   const allFields = form.getFields();
   const valueBy = buildAliasView(fields);
   let filled = 0;
+
+  // NEW: force all fields to use our embedded font DA
+  for (const fld of allFields) {
+    try { fld.acroField.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g')); } catch (_) {}
+  }
 
   for (const f of allFields) {
     const name = f.getName ? f.getName() : '';
@@ -186,7 +188,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (ctor.includes('Text')) {
       if (valRaw != null) {
         f.setText(String(valRaw));
-        try { f.updateAppearances(customFont); } catch (_) {}
         filled++;
       }
       continue;
@@ -206,23 +207,19 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     if (ctor.includes('Check')) {
       const n = String(name);
-
       const m = n.match(/^(.*)_(yes|no)$/i);
       if (m) {
         const base = m[1];
-        const isYesBox = m[2].toLowerCase() === 'yes';
+        const isYes = m[2].toLowerCase() === 'yes';
         const baseVal = valueBy[base];
         if (baseVal != null) {
           const yn = normalizeYesNo(baseVal);
-          if ((isYesBox && yn === 'yes') || (!isYesBox && yn === 'no')) f.check();
+          if ((isYes && yn === 'yes') || (!isYes && yn === 'no')) f.check();
           else f.uncheck();
           filled++;
-        } else {
-          f.uncheck();
-        }
+        } else f.uncheck();
         continue;
       }
-
       const rm = n.match(/^DestinationRegion_(.+)$/);
       if (rm) {
         const want = stripWeird(rm[1]);
@@ -231,7 +228,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         filled++;
         continue;
       }
-
       if (valueBy[n] != null) {
         const yn = normalizeYesNo(valueBy[n]);
         if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
@@ -242,10 +238,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // Final: regenerate once after all updates
+  // ---- finalize appearances & flatten ----
   try { form.updateFieldAppearances(customFont); } catch (_) {}
+  try { form.flatten(); } catch (_) {}
 
-  // 5) watermark
+  // 5) watermark (optional)
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
   if (wmText) {
     for (const page of pdfDoc.getPages()) {
@@ -261,12 +258,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 5.5) optional flatten
-  if (opts.flatten) {
-    try { form.flatten(); } catch (_) {}
-  }
-
-  // 6) save
+  // Save
   let outBytes;
   try {
     outBytes = await pdfDoc.save({
@@ -289,9 +281,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-app.get('/', (_req, res) => {
-  res.type('text/plain').send('PDF filler is up. Try GET /health');
-});
+app.get('/', (_req, res) => res.type('text/plain').send('PDF filler is up. Try GET /health'));
 
 app.get('/health', (_req, res) => {
   res.json({
@@ -303,29 +293,6 @@ app.get('/health', (_req, res) => {
       : (process.env.GOOGLE_APPLICATION_CREDENTIALS ? 'file-path' : 'adc/unknown'),
     fontEnv: process.env.FONT_TTF_PATH || '(none)',
   });
-});
-
-app.get('/fields', async (req, res) => {
-  try {
-    const fileId = (req.query.fileId || '').trim();
-    if (!fileId) return res.status(400).json({ error: 'fileId is required' });
-
-    const localPath = path.join(TMP, `template_${fileId}.pdf`);
-    await downloadDriveFile(fileId, localPath);
-
-    const bytes = fs.readFileSync(localPath);
-    const pdfDoc = await PDFDocument.load(bytes);
-    let names = [];
-    try {
-      const form = pdfDoc.getForm();
-      const flds = form ? form.getFields() : [];
-      names = flds.map(f => f.getName());
-    } catch (_) {}
-    res.json({ count: names.length, names });
-  } catch (e) {
-    log('List fields failed:', e && (e.stack || e));
-    res.status(500).json({ error: 'List fields failed', detail: e.message });
-  }
 });
 
 app.post('/fill', async (req, res) => {
@@ -348,12 +315,7 @@ app.post('/fill', async (req, res) => {
     log('INCOMING (probe):', JSON.stringify(probe));
 
     const wm = watermarkText || (mode === 'review' ? '確認用 / DRAFT' : '');
-    const result = await fillPdf(
-      tmpTemplate,
-      outPath,
-      fields || {},
-      { watermarkText: wm, flatten: mode !== 'review' }
-    );
+    const result = await fillPdf(tmpTemplate, outPath, fields || {}, { watermarkText: wm });
     log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
 
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
@@ -363,85 +325,6 @@ app.post('/fill', async (req, res) => {
   } catch (err) {
     log('ERROR /fill:', err && (err.stack || err));
     res.status(500).json({ error: 'Fill failed', detail: err.message });
-  }
-});
-
-/* ---------------- Debug endpoints (unchanged) ---------------- */
-
-app.get('/debug/passthrough', async (req, res) => {
-  try {
-    const fileId = (req.query.fileId || '').trim();
-    if (!fileId) return res.status(400).json({ ok: false, error: 'fileId required' });
-
-    const local = path.join(TMP, `pt_${fileId}.pdf`);
-    await downloadDriveFile(fileId, local);
-    const uploaded = await uploadToDrive(local, `PASSTHROUGH_${Date.now()}.pdf`);
-    res.json({ ok: true, link: uploaded.webViewLink });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get('/debug/roundtrip', async (req, res) => {
-  try {
-    const fileId = (req.query.fileId || '').trim();
-    if (!fileId) return res.status(400).json({ ok: false, error: 'fileId required' });
-
-    const src = path.join(TMP, `rt_${fileId}.pdf`);
-    await downloadDriveFile(fileId, src);
-
-    const bytes = fs.readFileSync(src);
-    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
-    const outBytes = await doc.save({ useObjectStreams: false });
-    const out = path.join(TMP, `ROUNDTRIP_${Date.now()}.pdf`);
-    fs.writeFileSync(out, outBytes);
-
-    const uploaded = await uploadToDrive(out, `ROUNDTRIP_${Date.now()}.pdf`);
-    res.json({ ok: true, link: uploaded.webViewLink });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get('/debug/overlay', async (req, res) => {
-  try {
-    const fileId = (req.query.fileId || '').trim();
-    if (!fileId) return res.status(400).json({ ok: false, error: 'fileId required' });
-
-    const src = path.join(TMP, `ov_${fileId}.pdf`);
-    await downloadDriveFile(fileId, src);
-
-    const bytes = fs.readFileSync(src);
-    const doc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
-    try { doc.registerFontkit(fontkit); } catch (_) {}
-
-    let fontBytes = null;
-    const pref = process.env.FONT_TTF_PATH;
-    const candidates = [
-      pref,
-      path.join(ROOT, 'fonts/KozMinPr6N-Regular.otf'),
-      path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),
-      path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf'),
-      path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
-    ].filter(Boolean);
-    for (const p of candidates) {
-      if (p && fs.existsSync(p)) { fontBytes = fs.readFileSync(p); break; }
-    }
-    const font = fontBytes ? await doc.embedFont(fontBytes, { subset: false }) : undefined;
-
-    const page = doc.getPages()[0];
-    page.drawText('VISIBLE OVERLAY TEST あいうえお 山田太郎', {
-      x: 48, y: 720, size: 14, font, color: rgb(0, 0, 0)
-    });
-
-    const outBytes = await doc.save({ useObjectStreams: false });
-    const out = path.join(TMP, `OVERLAY_${Date.now()}.pdf`);
-    fs.writeFileSync(out, outBytes);
-
-    const uploaded = await uploadToDrive(out, `OVERLAY_${Date.now()}.pdf`);
-    res.json({ ok: true, link: uploaded.webViewLink });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
