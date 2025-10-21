@@ -18,12 +18,8 @@ const ROOT = process.cwd();
 
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
-function log(...args) {
-  console.log(new Date().toISOString(), '-', ...args);
-}
-function ensureDir(p) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
+function log(...args) { console.log(new Date().toISOString(), '-', ...args); }
+function ensureDir(p) { if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true }); }
 
 // ---------- Google Drive client ----------
 function getDriveClient() {
@@ -68,11 +64,9 @@ async function uploadToDrive(localPath, name, parentId) {
 }
 
 /* ---------------- helpers: normalization & alias ---------------- */
-
 function stripWeird(s) {
   if (s == null) return '';
-  let t = String(s);
-  return t
+  return String(s)
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
     .replace(/[“”„‟〝〞＂"]/g, '')
     .replace(/[‘’‚‛′＇']/g, '')
@@ -92,13 +86,12 @@ function normalizeRegion(vRaw) {
   const v = stripWeird(vRaw);
   const t = v.toLowerCase();
   const map = {
-    'asia': 'アジア','europe': 'ヨーロッパ','oceania': 'オセアニア',
-    'north america': '北米','south america': '中南米','latin america': '中南米',
-    'africa': 'アフリカ','middle east': '中東','other': 'その他',
+    'asia':'アジア','europe':'ヨーロッパ','oceania':'オセアニア',
+    'north america':'北米','south america':'中南米','latin america':'中南米',
+    'africa':'アフリカ','middle east':'中東','other':'その他'
   };
   return map[t] || v;
 }
-
 function buildAliasView(fieldsIn) {
   const f = fieldsIn || {};
   const out = { ...f };
@@ -125,8 +118,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
 
+  // font
   try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
-
   let customFont = null;
   let chosenFontPath = null;
   const fontCandidates = [
@@ -136,7 +129,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf'),
     path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
   ].filter(Boolean);
-
   for (const p of fontCandidates) {
     try {
       if (p && fs.existsSync(p)) {
@@ -154,7 +146,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   }
   if (!customFont) throw new Error('CJK font not embedded. Set FONT_TTF_PATH.');
 
-  // --- Set global AcroForm defaults ---
+  // AcroForm defaults
   let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
   let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
   if (!acroForm) {
@@ -169,42 +161,34 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
   acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
 
-  // --- Fill logic ---
   const form = pdfDoc.getForm();
   const allFields = form.getFields();
   const valueBy = buildAliasView(fields);
   let filled = 0;
 
-  // NEW: force all fields to use our embedded font DA
+  // make every field explicitly use /F0 (defensive)
   for (const fld of allFields) {
     try { fld.acroField.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g')); } catch (_) {}
   }
 
+  // fill fields
   for (const f of allFields) {
     const name = f.getName ? f.getName() : '';
     const ctor = f.constructor && f.constructor.name || '';
     const valRaw = fields[name];
 
     if (ctor.includes('Text')) {
-      if (valRaw != null) {
-        f.setText(String(valRaw));
-        filled++;
-      }
+      if (valRaw != null) { f.setText(String(valRaw)); filled++; }
       continue;
     }
     if (ctor.includes('Dropdown')) {
-      if (valRaw != null) {
-        try { f.select(String(valRaw)); filled++; } catch (_) {}
-      }
+      if (valRaw != null) { try { f.select(String(valRaw)); filled++; } catch (_) {} }
       continue;
     }
     if (ctor.includes('Radio')) {
-      if (valRaw != null) {
-        try { f.select(String(valRaw)); filled++; } catch (_) {}
-      }
+      if (valRaw != null) { try { f.select(String(valRaw)); filled++; } catch (_) {} }
       continue;
     }
-
     if (ctor.includes('Check')) {
       const n = String(name);
       const m = n.match(/^(.*)_(yes|no)$/i);
@@ -214,8 +198,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         const baseVal = valueBy[base];
         if (baseVal != null) {
           const yn = normalizeYesNo(baseVal);
-          if ((isYes && yn === 'yes') || (!isYes && yn === 'no')) f.check();
-          else f.uncheck();
+          if ((isYes && yn === 'yes') || (!isYes && yn === 'no')) f.check(); else f.uncheck();
           filled++;
         } else f.uncheck();
         continue;
@@ -230,19 +213,63 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       }
       if (valueBy[n] != null) {
         const yn = normalizeYesNo(valueBy[n]);
-        if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
-        else f.uncheck();
+        if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check(); else f.uncheck();
         filled++;
         continue;
       }
     }
   }
 
-  // ---- finalize appearances & flatten ----
+  // ---- BURN-IN FALLBACK for text fields (forces visibility in Google Drive etc.) ----
+  try {
+    for (const f of allFields) {
+      const name = f.getName ? f.getName() : '';
+      const ctor = f.constructor && f.constructor.name || '';
+      const val = fields[name];
+      if (!ctor.includes('Text') || val == null || val === '') continue;
+
+      const widgets = (f.acroField && f.acroField.getWidgets) ? f.acroField.getWidgets() : [];
+      for (const w of widgets) {
+        try {
+          const page = w.getPage && w.getPage();
+          if (!page) continue;
+
+          // rectangle -> {x,y,width,height} (fallback to raw array)
+          let rect = w.getRectangle && w.getRectangle();
+          if (!rect) {
+            const raw = w.getRectangle ? w.getRectangle() : null;
+            if (Array.isArray(raw) && raw.length === 4) {
+              rect = { x: raw[0], y: raw[1], width: raw[2]-raw[0], height: raw[3]-raw[1] };
+            }
+          }
+          if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+
+          const padding = 2;
+          // auto-fit font size into the field box (simple shrink-to-fit)
+          let size = Math.min(12, rect.height - 2 * padding);
+          const text = String(val);
+          const maxWidth = rect.width - 2 * padding;
+          while (size > 6 && customFont.widthOfTextAtSize(text, size) > maxWidth) size -= 0.5;
+
+          page.drawText(text, {
+            x: rect.x + padding,
+            y: rect.y + (rect.height - size) / 2,
+            size,
+            font: customFont,
+            color: rgb(0, 0, 0)
+          });
+        } catch (_) { /* ignore a single widget failure */ }
+      }
+    }
+  } catch (e) {
+    log('Burn-in fallback failed:', e && e.message);
+  }
+
+  // finalize: regenerate & flatten
   try { form.updateFieldAppearances(customFont); } catch (_) {}
   try { form.flatten(); } catch (_) {}
 
-  // 5) watermark (optional)
+  // watermark (optional)
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
   if (wmText) {
     for (const page of pdfDoc.getPages()) {
@@ -258,7 +285,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // Save
+  // save
   let outBytes;
   try {
     outBytes = await pdfDoc.save({
@@ -276,7 +303,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 }
 
 /* ---------------- HTTP server ---------------- */
-
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
