@@ -200,8 +200,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     // Text/Dropdown/Radio by exact key
     if (ctor.includes('Text')) {
       if (valRaw != null) {
-        f.setText(String(valRaw));
-        try { f.updateAppearances(customFont); } catch (_) {}
+        f.setText(String(valRaw));  // 見た目は再生成しない＝テンプレの自動縮小が生きる
         filled++;
       }
       continue;
@@ -263,9 +262,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       // それ以外は扱わない（名寄せできない）
     }
   }
-
-  // 4) rebuild appearances
-  try { form.updateFieldAppearances(customFont); } catch (_) {}
 
   // 5) watermark
   const wmText = opts.watermarkText && String(opts.watermarkText).trim();
