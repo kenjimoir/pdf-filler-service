@@ -182,8 +182,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const drFont = dr.get(PDFName.of('Font')) || pdfDoc.context.obj({});
   drFont.set(PDFName.of('F0'), customFont.ref);
   dr.set(PDFName.of('Font'), drFont);
-  // CHANGED: DA 10pt 固定 → 0pt（自動）に
-  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 0 Tf 0 g'));
+  acroForm.set(PDFName.of('DR'), dr);
+  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 10 Tf 0 g'));
   acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
 
   // 3) fill (robust yes/no + alias)
@@ -200,23 +200,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     // Text/Dropdown/Radio by exact key
     if (ctor.includes('Text')) {
       if (valRaw != null) {
-        // CHANGED: 各テキストフィールドの DA を「フォントのみ F0 に置換、サイズは既存値を維持。
-        // 既存サイズが無い/0 の場合は 0（自動）」に設定してから描画
-        try {
-          const acro = f.acroField || f._acroField || f['acroField'];
-          if (acro && acro.dict) {
-            const oldDAObj = acro.dict.get(PDFName.of('DA'));
-            const oldDA = oldDAObj ? (oldDAObj.decodeText ? oldDAObj.decodeText() : String(oldDAObj)) : '';
-            let newDA = '/F0 0 Tf 0 g'; // デフォルトは自動
-            const m = oldDA.match(/\/([A-Za-z0-9]+)\s+([0-9]+(?:\.[0-9]+)?)\s+Tf/i);
-            if (m) {
-              // 既存サイズを引き継ぐ（0 なら 0 のまま）
-              newDA = `/F0 ${m[2]} Tf 0 g`;
-            }
-            acro.dict.set(PDFName.of('DA'), PDFString.of(newDA));
-          }
-        } catch (_) {}
-
         f.setText(String(valRaw));
         try { f.updateAppearances(customFont); } catch (_) {}
         filled++;
@@ -258,8 +241,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         continue;
       }
 
-      // 3-2) Region_アジア のような単項目一致
-      const rm = n.match(/^Region_(.+)$/);
+      // 3-2) DestinationRegion_アジア のような単項目一致  ← (reverted as requested)
+      const rm = n.match(/^DestinationRegion_(.+)$/);
       if (rm) {
         const want = stripWeird(rm[1]);
         const given = normalizeRegion(valueBy['DestinationRegion'] || '');
