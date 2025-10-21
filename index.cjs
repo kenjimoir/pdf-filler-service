@@ -422,4 +422,14 @@ app.listen(PORT, () => {
   log(`OUTPUT_FOLDER_ID: ${OUTPUT_FOLDER_ID || '(none)'}`);
   log(`FONT_TTF_PATH: ${process.env.FONT_TTF_PATH || '(none)'}`);
   log(`RESPECT_TEMPLATE_APPEARANCE: ${RESPECT_TEMPLATE_APPEARANCE}`);
-  log(`
+  log(`FORCE_BURN_IN: ${FORCE_BURN_IN}`);
+  log(
+    `Creds: ${
+      process.env.GOOGLE_CREDENTIALS_JSON
+        ? 'GOOGLE_CREDENTIALS_JSON'
+        : process.env.GOOGLE_APPLICATION_CREDENTIALS
+        ? 'GOOGLE_APPLICATION_CREDENTIALS'
+        : 'ADC/unknown'
+    }`
+  );
+});
