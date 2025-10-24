@@ -291,9 +291,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             log(`❌ Error with checkbox ${n}:`, e.message);
           }
         } else {
-          // Check for PhoneType checkboxes (Japanese text values)
+          // Check for PhoneType and TravelerSex checkboxes (Japanese text values)
           const isPhoneTypeField = n.includes('PhoneType') || n.includes('電話');
+          const isTravelerSexField = n.includes('TravelerSex') || n.includes('Sex') || n.includes('性別');
           const phoneTypeValue = String(single).trim();
+          const travelerSexValue = String(single).trim();
           
           if (isPhoneTypeField) {
             log(`PhoneType checkbox ${n}: value="${phoneTypeValue}"`);
@@ -331,6 +333,41 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               log(`❌ Unchecked PhoneType checkbox ${n} (no match for value: ${phoneTypeValue})`);
+            }
+          } else if (isTravelerSexField) {
+            log(`TravelerSex checkbox ${n}: value="${travelerSexValue}"`);
+            
+            // Check if this field should be checked based on the value
+            const shouldCheck = (
+              // Handle explicit field names (if you rename them)
+              (n === 'TravelerSex_男性' && travelerSexValue === 'yes') ||
+              (n === 'TravelerSex_女性' && travelerSexValue === 'yes') ||
+              // Handle generic 'TravelerSex' field name matching its value
+              (n === 'TravelerSex' && travelerSexValue === '男性') ||
+              (n === 'TravelerSex' && travelerSexValue === '女性') ||
+              (n === 'TravelerSex' && travelerSexValue === 'Male') ||
+              (n === 'TravelerSex' && travelerSexValue === 'Female') ||
+              // Handle specific field names containing the type
+              (n.includes('男性') && travelerSexValue === '男性') ||
+              (n.includes('女性') && travelerSexValue === '女性') ||
+              (n.includes('Male') && travelerSexValue === '男性') ||
+              (n.includes('Female') && travelerSexValue === '女性')
+            );
+            
+            if (shouldCheck) {
+              // Simple checkbox logic for explicit field names
+              f.check();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
+              filled++;
+              log(`✅ Checked TravelerSex ${n} (value: ${travelerSexValue})`);
+            } else {
+              f.uncheck();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
+              log(`❌ Unchecked TravelerSex checkbox ${n} (no match for value: ${travelerSexValue})`);
             }
           } else {
             // For other non-numeric values, use the existing yes/no logic
