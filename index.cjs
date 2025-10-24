@@ -213,6 +213,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     const ctor = f.constructor && f.constructor.name || '';
     const valRaw = resolveValue(name, fields, valueBy);
 
+    // Debug specific fields
+    if (name === 'CoverageValue' || name === 'DestinationOtherText') {
+      log(`Debug field ${name}: valRaw="${valRaw}", ctor="${ctor}"`);
+    }
+
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
@@ -220,6 +225,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           try { f.updateAppearances(customFont); } catch (_) {}
         }
         filled++;
+        if (name === 'CoverageValue' || name === 'DestinationOtherText') {
+          log(`✅ Set text field ${name} to: "${valRaw}"`);
+        }
+      } else {
+        if (name === 'CoverageValue' || name === 'DestinationOtherText') {
+          log(`❌ Text field ${name} has empty/null value: "${valRaw}"`);
+        }
       }
       continue;
     }
