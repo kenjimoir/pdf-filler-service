@@ -300,6 +300,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             
             // Check if this field should be checked based on the value
             const shouldCheck = (
+              // Handle generic 'PhoneType' field name matching its value
+              (n === 'PhoneType' && phoneTypeValue === '自宅') ||
+              (n === 'PhoneType' && phoneTypeValue === '勤務先') ||
+              (n === 'PhoneType' && phoneTypeValue === '携帯') ||
+              // Handle specific field names containing the type
               (n.includes('自宅') && phoneTypeValue === '自宅') ||
               (n.includes('勤務先') && phoneTypeValue === '勤務先') ||
               (n.includes('携帯') && phoneTypeValue === '携帯') ||
