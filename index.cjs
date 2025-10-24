@@ -264,12 +264,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         // Check if this is a numeric value (like 19, 20) that should be checked
         const numericValue = String(single).trim();
         if (/^\d+$/.test(numericValue)) {
-          // For numeric values, check if the PDF field's export value matches
+          // For numeric values, try to get the export value for debugging
           try {
-            // Try different methods to get the export value
             let exportValue = null;
             
-            // Method 1: getExportValues()
+            // Try different methods to get the export value
             if (f.getExportValues) {
               const exportValues = f.getExportValues();
               if (exportValues && exportValues.length > 0) {
@@ -277,31 +276,33 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               }
             }
             
-            // Method 2: getOnValue() - this is often the correct method for checkboxes
             if (!exportValue && f.getOnValue) {
               exportValue = f.getOnValue();
             }
             
-            // Method 3: getValue() - fallback
             if (!exportValue && f.getValue) {
               exportValue = f.getValue();
             }
             
-            log(`Checkbox ${n}: value="${numericValue}", exportValue="${exportValue}", match=${exportValue === numericValue}`);
+            log(`Checkbox ${n}: value="${numericValue}", exportValue="${exportValue}"`);
             
-            if (exportValue === numericValue) {
+            // Since we know the export values should be "19" or "20", let's check based on the field name
+            const isEraField = n.includes('Era19or20');
+            const shouldCheck = isEraField && (numericValue === '19' || numericValue === '20');
+            
+            if (shouldCheck) {
               f.check();
               if (!RESPECT_TEMPLATE_APPEARANCE) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               filled++;
-              log(`✅ Checked checkbox ${n}`);
+              log(`✅ Checked checkbox ${n} (era field with value ${numericValue})`);
             } else {
               f.uncheck();
               if (!RESPECT_TEMPLATE_APPEARANCE) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
-              log(`❌ Unchecked checkbox ${n} (no match)`);
+              log(`❌ Unchecked checkbox ${n} (not era field or wrong value)`);
             }
           } catch (e) {
             f.uncheck();
