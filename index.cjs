@@ -374,6 +374,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           } else if (isSameAsTravelerField) {
             log(`SameAsTraveler checkbox ${n}: value="${sameAsTravelerValue}"`);
             
+            // Debug: Check what value is actually being sent
+            log(`SameAsTraveler debug - field name: "${n}", value: "${sameAsTravelerValue}", type: ${typeof sameAsTravelerValue}`);
+            
             // Check if this field should be checked based on the value
             const shouldCheck = (
               // Handle various checkbox value formats
@@ -382,8 +385,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               sameAsTravelerValue === '1' ||
               sameAsTravelerValue === 'yes' ||
               sameAsTravelerValue === 'はい' ||
-              sameAsTravelerValue === 'checked'
+              sameAsTravelerValue === 'checked' ||
+              sameAsTravelerValue === 'SameAsTraveler' ||  // Sometimes the field name itself is sent
+              sameAsTravelerValue === 'on' ||
+              sameAsTravelerValue === 'true'
             );
+            
+            log(`SameAsTraveler shouldCheck: ${shouldCheck} for value: "${sameAsTravelerValue}"`);
             
             if (shouldCheck) {
               // Simple checkbox logic for SameAsTraveler
