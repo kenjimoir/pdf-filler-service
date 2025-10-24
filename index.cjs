@@ -266,8 +266,27 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         if (/^\d+$/.test(numericValue)) {
           // For numeric values, check if the PDF field's export value matches
           try {
-            const exportValues = f.getExportValues ? f.getExportValues() : [];
-            const exportValue = exportValues && exportValues.length > 0 ? exportValues[0] : null;
+            // Try different methods to get the export value
+            let exportValue = null;
+            
+            // Method 1: getExportValues()
+            if (f.getExportValues) {
+              const exportValues = f.getExportValues();
+              if (exportValues && exportValues.length > 0) {
+                exportValue = exportValues[0];
+              }
+            }
+            
+            // Method 2: getOnValue() - this is often the correct method for checkboxes
+            if (!exportValue && f.getOnValue) {
+              exportValue = f.getOnValue();
+            }
+            
+            // Method 3: getValue() - fallback
+            if (!exportValue && f.getValue) {
+              exportValue = f.getValue();
+            }
+            
             log(`Checkbox ${n}: value="${numericValue}", exportValue="${exportValue}", match=${exportValue === numericValue}`);
             
             if (exportValue === numericValue) {
