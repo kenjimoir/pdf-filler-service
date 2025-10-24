@@ -291,11 +291,44 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             log(`❌ Error with checkbox ${n}:`, e.message);
           }
         } else {
-          // For non-numeric values, use the existing yes/no logic
-          const yn = normalizeYesNo(single);
-          if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
-          else f.uncheck();
-          filled++;
+          // Check for PhoneType checkboxes (Japanese text values)
+          const isPhoneTypeField = n.includes('PhoneType') || n.includes('電話');
+          const phoneTypeValue = String(single).trim();
+          
+          if (isPhoneTypeField) {
+            log(`PhoneType checkbox ${n}: value="${phoneTypeValue}"`);
+            
+            // Check if this field should be checked based on the value
+            const shouldCheck = (
+              (n.includes('自宅') && phoneTypeValue === '自宅') ||
+              (n.includes('勤務先') && phoneTypeValue === '勤務先') ||
+              (n.includes('携帯') && phoneTypeValue === '携帯') ||
+              (n.includes('Home') && phoneTypeValue === '自宅') ||
+              (n.includes('Work') && phoneTypeValue === '勤務先') ||
+              (n.includes('Mobile') && phoneTypeValue === '携帯')
+            );
+            
+            if (shouldCheck) {
+              f.check();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
+              filled++;
+              log(`✅ Checked PhoneType checkbox ${n} (value: ${phoneTypeValue})`);
+            } else {
+              f.uncheck();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
+              log(`❌ Unchecked PhoneType checkbox ${n} (no match for value: ${phoneTypeValue})`);
+            }
+          } else {
+            // For other non-numeric values, use the existing yes/no logic
+            const yn = normalizeYesNo(single);
+            if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
+            else f.uncheck();
+            filled++;
+          }
         }
         continue;
       }
