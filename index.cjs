@@ -138,24 +138,15 @@ function buildAliasView(fieldsIn) {
   return out;
 }
 
-/** Resolve a value for a PDF field name (exact → alias → common variants). */
+/** Resolve a value for a PDF field name - simplified direct lookup. */
 function resolveValue(name, fields, aliasView) {
+  // 1. Direct field match (most common case)
   if (fields[name] != null && fields[name] !== '') return fields[name];
+  
+  // 2. Check alias view (for backward compatibility with existing aliases)
   if (aliasView && aliasView[name] != null && aliasView[name] !== '') return aliasView[name];
-
-  const variants = [];
-  const n = String(name || '');
-  variants.push(n.replace(/\s+/g, ''));
-  variants.push(n.replace(/[-\s]/g, '_'));
-  variants.push(n.replace(/[_\s]/g, '-'));
-  if (/FullName$/.test(n)) { variants.push(n + 'Kanji'); variants.push(n + 'Kana'); }
-  if (/Kanji$/.test(n)) variants.push(n.replace(/Kanji$/, ''));
-  if (/Kana$/.test(n)) variants.push(n.replace(/Kana$/, ''));
-
-  for (const v of variants) {
-    if (fields[v] != null && fields[v] !== '') return fields[v];
-    if (aliasView && aliasView[v] != null && aliasView[v] !== '') return aliasView[v];
-  }
+  
+  // 3. No match found
   return '';
 }
 
@@ -270,10 +261,28 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       }
       const single = resolveValue(n, fields, valueBy);
       if (single !== '') {
-        const yn = normalizeYesNo(single);
-        if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
-        else f.uncheck();
-        filled++;
+        // Check if this is a numeric value (like 19, 20) that should be checked
+        const numericValue = String(single).trim();
+        if (/^\d+$/.test(numericValue)) {
+          // For numeric values, check if the PDF field's export value matches
+          try {
+            const exportValue = f.getExportValues ? f.getExportValues()[0] : null;
+            if (exportValue === numericValue) {
+              f.check();
+              filled++;
+            } else {
+              f.uncheck();
+            }
+          } catch (_) {
+            f.uncheck();
+          }
+        } else {
+          // For non-numeric values, use the existing yes/no logic
+          const yn = normalizeYesNo(single);
+          if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
+          else f.uncheck();
+          filled++;
+        }
         continue;
       }
     }
