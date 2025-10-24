@@ -218,6 +218,26 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log(`Debug field ${name}: valRaw="${valRaw}", ctor="${ctor}"`);
     }
 
+    // Handle CoverageValue as checkbox field
+    if (name === 'CoverageValue' && ctor.includes('Check')) {
+      log(`CoverageValue checkbox: value="${valRaw}"`);
+      if (valRaw === '月' || valRaw === '日') {
+        f.check();
+        if (!RESPECT_TEMPLATE_APPEARANCE) {
+          try { f.updateAppearances(customFont); } catch (_) {}
+        }
+        filled++;
+        log(`✅ Checked CoverageValue checkbox (value: ${valRaw})`);
+      } else {
+        f.uncheck();
+        if (!RESPECT_TEMPLATE_APPEARANCE) {
+          try { f.updateAppearances(customFont); } catch (_) {}
+        }
+        log(`❌ Unchecked CoverageValue checkbox (no match for value: ${valRaw})`);
+      }
+      continue;
+    }
+
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
@@ -225,11 +245,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           try { f.updateAppearances(customFont); } catch (_) {}
         }
         filled++;
-        if (name === 'CoverageValue' || name === 'DestinationOtherText') {
+        if (name === 'DestinationOtherText') {
           log(`✅ Set text field ${name} to: "${valRaw}"`);
         }
       } else {
-        if (name === 'CoverageValue' || name === 'DestinationOtherText') {
+        if (name === 'DestinationOtherText') {
           log(`❌ Text field ${name} has empty/null value: "${valRaw}"`);
         }
       }
