@@ -291,11 +291,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             log(`❌ Error with checkbox ${n}:`, e.message);
           }
         } else {
-          // Check for PhoneType and TravelerSex checkboxes (Japanese text values)
+          // Check for PhoneType, TravelerSex, and SameAsTraveler checkboxes (Japanese text values)
           const isPhoneTypeField = n.includes('PhoneType') || n.includes('電話');
           const isTravelerSexField = n.includes('TravelerSex') || n.includes('Sex') || n.includes('性別');
+          const isSameAsTravelerField = n.includes('SameAsTraveler') || n.includes('同一') || n.includes('Same');
           const phoneTypeValue = String(single).trim();
           const travelerSexValue = String(single).trim();
+          const sameAsTravelerValue = String(single).trim();
           
           if (isPhoneTypeField) {
             log(`PhoneType checkbox ${n}: value="${phoneTypeValue}"`);
@@ -368,6 +370,35 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               log(`❌ Unchecked TravelerSex checkbox ${n} (no match for value: ${travelerSexValue})`);
+            }
+          } else if (isSameAsTravelerField) {
+            log(`SameAsTraveler checkbox ${n}: value="${sameAsTravelerValue}"`);
+            
+            // Check if this field should be checked based on the value
+            const shouldCheck = (
+              // Handle various checkbox value formats
+              sameAsTravelerValue === 'on' ||
+              sameAsTravelerValue === 'true' ||
+              sameAsTravelerValue === '1' ||
+              sameAsTravelerValue === 'yes' ||
+              sameAsTravelerValue === 'はい' ||
+              sameAsTravelerValue === 'checked'
+            );
+            
+            if (shouldCheck) {
+              // Simple checkbox logic for SameAsTraveler
+              f.check();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
+              filled++;
+              log(`✅ Checked SameAsTraveler ${n} (value: ${sameAsTravelerValue})`);
+            } else {
+              f.uncheck();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
+              log(`❌ Unchecked SameAsTraveler checkbox ${n} (no match for value: ${sameAsTravelerValue})`);
             }
           } else {
             // For other non-numeric values, use the existing yes/no logic
