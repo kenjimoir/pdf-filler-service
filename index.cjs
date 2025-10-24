@@ -266,15 +266,27 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         if (/^\d+$/.test(numericValue)) {
           // For numeric values, check if the PDF field's export value matches
           try {
-            const exportValue = f.getExportValues ? f.getExportValues()[0] : null;
+            const exportValues = f.getExportValues ? f.getExportValues() : [];
+            const exportValue = exportValues && exportValues.length > 0 ? exportValues[0] : null;
+            log(`Checkbox ${n}: value="${numericValue}", exportValue="${exportValue}", match=${exportValue === numericValue}`);
+            
             if (exportValue === numericValue) {
               f.check();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
               filled++;
+              log(`✅ Checked checkbox ${n}`);
             } else {
               f.uncheck();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
+              }
+              log(`❌ Unchecked checkbox ${n} (no match)`);
             }
-          } catch (_) {
+          } catch (e) {
             f.uncheck();
+            log(`❌ Error with checkbox ${n}:`, e.message);
           }
         } else {
           // For non-numeric values, use the existing yes/no logic
