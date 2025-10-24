@@ -308,6 +308,10 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               (n === 'PhoneType_自宅' && phoneTypeValue === 'yes') ||
               (n === 'PhoneType_勤務先' && phoneTypeValue === 'yes') ||
               (n === 'PhoneType_携帯' && phoneTypeValue === 'yes') ||
+              // Handle TravelerPhoneType explicit field names
+              (n === 'TravelerPhoneType_自宅' && phoneTypeValue === 'yes') ||
+              (n === 'TravelerPhoneType_勤務先' && phoneTypeValue === 'yes') ||
+              (n === 'TravelerPhoneType_携帯' && phoneTypeValue === 'yes') ||
               // Handle generic 'PhoneType' field name matching its value (fallback)
               (n === 'PhoneType' && phoneTypeValue === '自宅') ||
               (n === 'PhoneType' && phoneTypeValue === '勤務先') ||
