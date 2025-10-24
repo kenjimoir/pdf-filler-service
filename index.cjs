@@ -300,7 +300,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             
             // Check if this field should be checked based on the value
             const shouldCheck = (
-              // Handle generic 'PhoneType' field name matching its value
+              // Handle explicit field names (Option 1 approach)
+              (n === 'PhoneType_自宅' && phoneTypeValue === 'yes') ||
+              (n === 'PhoneType_勤務先' && phoneTypeValue === 'yes') ||
+              (n === 'PhoneType_携帯' && phoneTypeValue === 'yes') ||
+              // Handle generic 'PhoneType' field name matching its value (fallback)
               (n === 'PhoneType' && phoneTypeValue === '自宅') ||
               (n === 'PhoneType' && phoneTypeValue === '勤務先') ||
               (n === 'PhoneType' && phoneTypeValue === '携帯') ||
@@ -314,36 +318,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             );
             
             if (shouldCheck) {
-              // Debug: Check what methods are available
-              log(`PhoneType field methods: ${Object.getOwnPropertyNames(f).filter(name => typeof f[name] === 'function').join(', ')}`);
-              
-              // For PhoneType fields, this is likely a checkbox group issue
-              // The problem is that f.check() doesn't select the right option in a group
-              // We need to find the specific checkbox with the matching export value
-              
-              // Try to find and check the right checkbox in the group
-              try {
-                // Check if this is a checkbox group by looking for related fields
-                const allFields = form.getFields();
-                const relatedFields = allFields.filter(field => {
-                  const fieldName = field.getName ? field.getName() : '';
-                  return fieldName.includes('PhoneType') || fieldName.includes('電話');
-                });
-                
-                log(`Found ${relatedFields.length} related PhoneType fields: ${relatedFields.map(f => f.getName()).join(', ')}`);
-                
-                // For now, just check the current field and hope for the best
-                f.check();
-                if (!RESPECT_TEMPLATE_APPEARANCE) {
-                  try { f.updateAppearances(customFont); } catch (_) {}
-                }
-                filled++;
-                log(`✅ Checked PhoneType ${n} (value: ${phoneTypeValue}) - single checkbox approach`);
-                
-              } catch (error) {
-                log(`❌ Error with PhoneType ${n}: ${error.message}`);
-                f.uncheck();
+              // Simple checkbox logic for explicit field names
+              f.check();
+              if (!RESPECT_TEMPLATE_APPEARANCE) {
+                try { f.updateAppearances(customFont); } catch (_) {}
               }
+              filled++;
+              log(`✅ Checked PhoneType ${n} (value: ${phoneTypeValue})`);
             } else {
               f.uncheck();
               if (!RESPECT_TEMPLATE_APPEARANCE) {
