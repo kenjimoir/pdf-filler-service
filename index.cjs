@@ -264,29 +264,11 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         // Check if this is a numeric value (like 19, 20) that should be checked
         const numericValue = String(single).trim();
         if (/^\d+$/.test(numericValue)) {
-          // For numeric values, try to get the export value for debugging
+          // For numeric values, check based on field name pattern
           try {
-            let exportValue = null;
+            log(`Checkbox ${n}: value="${numericValue}"`);
             
-            // Try different methods to get the export value
-            if (f.getExportValues) {
-              const exportValues = f.getExportValues();
-              if (exportValues && exportValues.length > 0) {
-                exportValue = exportValues[0];
-              }
-            }
-            
-            if (!exportValue && f.getOnValue) {
-              exportValue = f.getOnValue();
-            }
-            
-            if (!exportValue && f.getValue) {
-              exportValue = f.getValue();
-            }
-            
-            log(`Checkbox ${n}: value="${numericValue}", exportValue="${exportValue}"`);
-            
-            // Since we know the export values should be "19" or "20", let's check based on the field name
+            // Check if this is an era field with valid values
             const isEraField = n.includes('Era19or20');
             const shouldCheck = isEraField && (numericValue === '19' || numericValue === '20');
             
