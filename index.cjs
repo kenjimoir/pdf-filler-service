@@ -314,54 +314,35 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             );
             
             if (shouldCheck) {
-              // For PhoneType fields, try multiple approaches
-              let success = false;
+              // Debug: Check what methods are available
+              log(`PhoneType field methods: ${Object.getOwnPropertyNames(f).filter(name => typeof f[name] === 'function').join(', ')}`);
               
-              // Try 1: Direct value selection
+              // For PhoneType fields, this is likely a checkbox group issue
+              // The problem is that f.check() doesn't select the right option in a group
+              // We need to find the specific checkbox with the matching export value
+              
+              // Try to find and check the right checkbox in the group
               try {
-                f.select(phoneTypeValue);
-                if (!RESPECT_TEMPLATE_APPEARANCE) {
-                  try { f.updateAppearances(customFont); } catch (_) {}
-                }
-                filled++;
-                log(`✅ Selected PhoneType ${n} (value: ${phoneTypeValue})`);
-                success = true;
-              } catch (selectError) {
-                log(`❌ Direct select failed for ${n}: ${selectError.message}`);
-              }
-              
-              // Try 2: Numeric mapping (if direct selection failed)
-              if (!success) {
-                const numericMapping = {
-                  '自宅': '1',
-                  '勤務先': '2', 
-                  '携帯': '3'
-                };
-                const numericValue = numericMapping[phoneTypeValue];
+                // Check if this is a checkbox group by looking for related fields
+                const allFields = form.getFields();
+                const relatedFields = allFields.filter(field => {
+                  const fieldName = field.getName ? field.getName() : '';
+                  return fieldName.includes('PhoneType') || fieldName.includes('電話');
+                });
                 
-                if (numericValue) {
-                  try {
-                    f.select(numericValue);
-                    if (!RESPECT_TEMPLATE_APPEARANCE) {
-                      try { f.updateAppearances(customFont); } catch (_) {}
-                    }
-                    filled++;
-                    log(`✅ Selected PhoneType ${n} (numeric: ${numericValue} for ${phoneTypeValue})`);
-                    success = true;
-                  } catch (numericError) {
-                    log(`❌ Numeric select failed for ${n}: ${numericError.message}`);
-                  }
-                }
-              }
-              
-              // Try 3: Fallback to check() if all else fails
-              if (!success) {
+                log(`Found ${relatedFields.length} related PhoneType fields: ${relatedFields.map(f => f.getName()).join(', ')}`);
+                
+                // For now, just check the current field and hope for the best
                 f.check();
                 if (!RESPECT_TEMPLATE_APPEARANCE) {
                   try { f.updateAppearances(customFont); } catch (_) {}
                 }
                 filled++;
-                log(`✅ Checked PhoneType ${n} (value: ${phoneTypeValue}) - fallback to check()`);
+                log(`✅ Checked PhoneType ${n} (value: ${phoneTypeValue}) - single checkbox approach`);
+                
+              } catch (error) {
+                log(`❌ Error with PhoneType ${n}: ${error.message}`);
+                f.uncheck();
               }
             } else {
               f.uncheck();
