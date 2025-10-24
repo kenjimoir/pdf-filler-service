@@ -314,7 +314,10 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             );
             
             if (shouldCheck) {
-              // For PhoneType fields, try select() first (for radio button groups)
+              // For PhoneType fields, try multiple approaches
+              let success = false;
+              
+              // Try 1: Direct value selection
               try {
                 f.select(phoneTypeValue);
                 if (!RESPECT_TEMPLATE_APPEARANCE) {
@@ -322,8 +325,37 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
                 }
                 filled++;
                 log(`✅ Selected PhoneType ${n} (value: ${phoneTypeValue})`);
+                success = true;
               } catch (selectError) {
-                // If select() fails, fall back to check()
+                log(`❌ Direct select failed for ${n}: ${selectError.message}`);
+              }
+              
+              // Try 2: Numeric mapping (if direct selection failed)
+              if (!success) {
+                const numericMapping = {
+                  '自宅': '1',
+                  '勤務先': '2', 
+                  '携帯': '3'
+                };
+                const numericValue = numericMapping[phoneTypeValue];
+                
+                if (numericValue) {
+                  try {
+                    f.select(numericValue);
+                    if (!RESPECT_TEMPLATE_APPEARANCE) {
+                      try { f.updateAppearances(customFont); } catch (_) {}
+                    }
+                    filled++;
+                    log(`✅ Selected PhoneType ${n} (numeric: ${numericValue} for ${phoneTypeValue})`);
+                    success = true;
+                  } catch (numericError) {
+                    log(`❌ Numeric select failed for ${n}: ${numericError.message}`);
+                  }
+                }
+              }
+              
+              // Try 3: Fallback to check() if all else fails
+              if (!success) {
                 f.check();
                 if (!RESPECT_TEMPLATE_APPEARANCE) {
                   try { f.updateAppearances(customFont); } catch (_) {}
