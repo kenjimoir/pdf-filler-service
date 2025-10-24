@@ -314,12 +314,23 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             );
             
             if (shouldCheck) {
-              f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
-                try { f.updateAppearances(customFont); } catch (_) {}
+              // For PhoneType fields, try select() first (for radio button groups)
+              try {
+                f.select(phoneTypeValue);
+                if (!RESPECT_TEMPLATE_APPEARANCE) {
+                  try { f.updateAppearances(customFont); } catch (_) {}
+                }
+                filled++;
+                log(`✅ Selected PhoneType ${n} (value: ${phoneTypeValue})`);
+              } catch (selectError) {
+                // If select() fails, fall back to check()
+                f.check();
+                if (!RESPECT_TEMPLATE_APPEARANCE) {
+                  try { f.updateAppearances(customFont); } catch (_) {}
+                }
+                filled++;
+                log(`✅ Checked PhoneType ${n} (value: ${phoneTypeValue}) - fallback to check()`);
               }
-              filled++;
-              log(`✅ Checked PhoneType checkbox ${n} (value: ${phoneTypeValue})`);
             } else {
               f.uncheck();
               if (!RESPECT_TEMPLATE_APPEARANCE) {
