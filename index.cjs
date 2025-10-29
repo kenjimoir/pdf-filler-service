@@ -9,7 +9,7 @@ const express = require('express');
 const cors = require('cors');
 const { PDFDocument, rgb, degrees, PDFName, PDFBool, PDFDict, PDFString, PDFNumber } = require('pdf-lib');
 const { google } = require('googleapis');
-const fontkit = require('@pdf-lib/fontkit');
+// const fontkit = require('@pdf-lib/fontkit'); // Not needed for Helvetica
 
 const PORT = process.env.PORT || 8080;
 const TMP = path.join(os.tmpdir(), 'pdf-filler');
@@ -156,60 +156,38 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
 
-  // 1) font
-  try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
+  // 1) font - Use Helvetica (standard PDF font)
   let customFont = null;
-  let chosenFontPath = null;
-  const fontCandidates = [
-    process.env.FONT_TTF_PATH,
-    path.join(ROOT, 'fonts/NotoSansJP-Regular.ttf'),
-    path.join(ROOT, 'fonts/NotoSansJP-Regular.otf'),
-    path.join(ROOT, 'fonts/NotoSerifCJKjp-Regular.otf'),
-    path.join(ROOT, 'fonts/KozMinPr6N-Regular.otf'),
-  ].filter(Boolean);
-  for (const p of fontCandidates) {
-    try {
-      if (p && fs.existsSync(p)) {
-        const fontBytes = fs.readFileSync(p);
-        const ext = path.extname(p).toLowerCase();
-        const allowSubset = ext !== '.otf';
-        // Enhanced font embedding for better Google Drive compatibility
-        customFont = await pdfDoc.embedFont(fontBytes, { 
-          subset: allowSubset,
-          // Force embedding of all glyphs for better compatibility
-          subsetEmbedded: true
-        });
-        chosenFontPath = p;
-        log('Embedded JP font:', p, '(subset:', allowSubset, ', subsetEmbedded: true)');
-        break;
-      }
-    } catch (e) {
-      log('Font embed failed for', p, e && e.message);
+  try {
+    customFont = await pdfDoc.embedFont('Helvetica');
+    log('Using Helvetica font (standard PDF font)');
+  } catch (e) {
+    log('Helvetica embed failed, using default font:', e.message);
+    // Fallback to default font - no custom font needed
+  }
+
+  // 2) AcroForm default appearance (only if custom font is available)
+  if (customFont) {
+    let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
+    let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
+    if (!acroForm) {
+      acroForm = pdfDoc.context.obj({});
+      pdfDoc.catalog.set(PDFName.of('AcroForm'), acroForm);
     }
-  }
-  if (!customFont) throw new Error('CJK font not embedded. Set FONT_TTF_PATH to a .ttf shipped with the repo.');
+    const dr = acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({});
+    const drFont = dr.get(PDFName.of('Font')) || pdfDoc.context.obj({});
+    drFont.set(PDFName.of('F0'), customFont.ref);
+    dr.set(PDFName.of('Font'), drFont);
+    acroForm.set(PDFName.of('DR'), dr);
 
-  // 2) AcroForm default appearance
-  let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
-  let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
-  if (!acroForm) {
-    acroForm = pdfDoc.context.obj({});
-    pdfDoc.catalog.set(PDFName.of('AcroForm'), acroForm);
+    // Set default appearance with Helvetica
+    acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
+    acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    
+    log('Helvetica font embedding enabled');
+  } else {
+    log('Using PDF default font (no custom font embedding)');
   }
-  const dr = acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({});
-  const drFont = dr.get(PDFName.of('Font')) || pdfDoc.context.obj({});
-  drFont.set(PDFName.of('F0'), customFont.ref);
-  dr.set(PDFName.of('Font'), drFont);
-  acroForm.set(PDFName.of('DR'), dr);
-
-  // Enhanced font embedding for better Google Drive compatibility
-  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
-  acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
-  
-  // Additional font embedding settings for better compatibility
-  acroForm.set(PDFName.of('SigFlags'), PDFNumber.of(3));
-  
-  log('Enhanced font embedding enabled for Google Drive compatibility');
 
   // 3) fill
   const form = pdfDoc.getForm();
@@ -266,8 +244,10 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
-        // Always update appearances with custom font for better Google Drive compatibility
-        try { f.updateAppearances(customFont); } catch (_) {}
+        // Update appearances with custom font if available
+        if (customFont) {
+          try { f.updateAppearances(customFont); } catch (_) {}
+        }
         filled++;
         if (name === 'DestinationOtherText') {
           log(`✅ Set text field ${name} to: "${valRaw}"`);
@@ -330,14 +310,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             
             if (shouldCheck) {
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               filled++;
               log(`✅ Checked checkbox ${n} (era field with value ${numericValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               log(`❌ Unchecked checkbox ${n} (not era field or wrong value)`);
@@ -384,14 +364,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             if (shouldCheck) {
               // Simple checkbox logic for explicit field names
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               filled++;
               log(`✅ Checked PhoneType ${n} (value: ${phoneTypeValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               log(`❌ Unchecked PhoneType checkbox ${n} (no match for value: ${phoneTypeValue})`);
@@ -510,14 +490,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             if (shouldCheck) {
               // Simple checkbox logic for explicit field names
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               filled++;
               log(`✅ Checked TravelerSex ${n} (value: ${travelerSexValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               log(`❌ Unchecked TravelerSex checkbox ${n} (no match for value: ${travelerSexValue})`);
@@ -547,14 +527,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             if (shouldCheck) {
               // Simple checkbox logic for SameAsTraveler
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               filled++;
               log(`✅ Checked SameAsTraveler ${n} (value: ${sameAsTravelerValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE) {
+              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
                 try { f.updateAppearances(customFont); } catch (_) {}
               }
               log(`❌ Unchecked SameAsTraveler checkbox ${n} (no match for value: ${sameAsTravelerValue})`);
