@@ -201,85 +201,25 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log('Loading Japanese font from:', fontPath);
       const fontBytes = fs.readFileSync(fontPath);
       
-      // Handle TTC (TrueType Collection) files - need to extract a font from the collection
+      // Handle TTC (TrueType Collection) files
       if (fontPath.toLowerCase().endsWith('.ttc')) {
-        log('   Detected TTC file, extracting font from collection...');
+        log('   Detected TTC file (TrueType Collection)...');
+        log('   ⚠️ TTC files are complex - pdf-lib may not support them directly');
+        log('   Attempting to embed TTC directly (may not work)...');
+        
         try {
-          // Use fontkit to open the TTC file
-          const fontCollection = fontkit.openSync(fontPath);
-          
-          // TTC files contain multiple fonts - try to get the first one or find one with a specific name
-          let selectedFont = null;
-          
-          // Try to find a font with "Mincho" or "明朝" in the name, or just use the first one
-          for (let i = 0; i < fontCollection.fonts.length; i++) {
-            const font = fontCollection.fonts[i];
-            const fontName = font.fullName || font.familyName || '';
-            log(`   Font ${i}: ${fontName}`);
-            
-            if (fontName.includes('Mincho') || fontName.includes('明朝') || fontName.includes('ProN')) {
-              selectedFont = font;
-              log(`   ✅ Selected font: ${fontName}`);
-              break;
-            }
-          }
-          
-          // If no specific font found, use the first one
-          if (!selectedFont && fontCollection.fonts.length > 0) {
-            selectedFont = fontCollection.fonts[0];
-            log(`   Using first font in collection: ${selectedFont.fullName || selectedFont.familyName || 'unnamed'}`);
-          }
-          
-          if (selectedFont) {
-            // Extract font data from the TTC collection
-            // Fontkit's font objects don't directly expose TTF bytes, so we need to serialize the font
-            let ttfBuffer;
-            try {
-              // Fontkit fonts have a `data` property or we need to serialize them
-              // Try to get the font's underlying data stream
-              if (selectedFont.stream) {
-                const streamData = selectedFont.stream.read();
-                if (streamData && streamData.length > 0) {
-                  ttfBuffer = Buffer.isBuffer(streamData) ? streamData : Buffer.from(streamData);
-                }
-              }
-              
-              // If stream didn't work, try accessing raw data properties
-              if (!ttfBuffer && selectedFont._font) {
-                // Try to serialize the font back to TTF format
-                // This is a workaround - fontkit doesn't provide direct TTF export
-                log('   ⚠️ Could not extract font directly, trying alternative method...');
-                
-                // Actually, pdf-lib might be able to handle the font object directly
-                // Let's try passing the font bytes from the original file at the right offset
-                // But this is complex... instead, let's try using the original TTC bytes
-                // and hope pdf-lib's fontkit integration can handle it
-                const ttcBytes = fs.readFileSync(fontPath);
-                
-                // Try embedding the whole TTC - pdf-lib with fontkit might handle it
-                log('   Attempting to embed TTC directly (pdf-lib may handle it with fontkit)...');
-                ttfBuffer = ttcBytes; // Will try this as a fallback
-              }
-              
-              if (!ttfBuffer || ttfBuffer.length === 0) {
-                throw new Error('Could not extract font data from TTC - consider using OTF/TTF format instead');
-              }
-              
-              // Try embedding - pdf-lib with fontkit registered should handle TTC
-              customFont = await pdfDoc.embedFont(ttfBuffer);
-              log('✅ Successfully embedded font from TTC');
-              log(`   Font name: ${selectedFont.fullName || selectedFont.familyName || 'unknown'}`);
-            } catch (extractError) {
-              log(`   ❌ TTC extraction failed: ${extractError.message}`);
-              log(`   💡 Suggestion: Use OTF/TTF format instead (e.g., NotoSansCJKjp-Regular.otf)`);
-              throw new Error(`Failed to extract font from TTC: ${extractError.message}. Consider using an OTF or TTF font file instead.`);
-            }
-          } else {
-            throw new Error('No fonts found in TTC collection');
-          }
-        } catch (e) {
-          log(`   ⚠️ TTC extraction failed: ${e.message}`);
-          throw new Error(`Failed to extract font from TTC: ${e.message}`);
+          // Try embedding TTC directly - pdf-lib with fontkit might handle it
+          // But this often fails, so we'll catch and suggest alternative
+          customFont = await pdfDoc.embedFont(fontBytes);
+          log('✅ Successfully embedded TTC file');
+        } catch (ttcError) {
+          log(`   ❌ TTC embedding failed: ${ttcError.message}`);
+          log(`   💡 TTC (TrueType Collection) files are not well-supported by pdf-lib`);
+          log(`   💡 RECOMMENDED: Update FONT_TTF_PATH to use an OTF or TTF font instead:`);
+          log(`      - fonts/NotoSansCJKjp-Regular.otf (recommended)`);
+          log(`      - fonts/NotoSansJP-Regular.ttf`);
+          log(`      - Or remove FONT_TTF_PATH to use the default OTF font`);
+          throw new Error(`TTC files are not supported by pdf-lib. Please use FONT_TTF_PATH=fonts/NotoSansCJKjp-Regular.otf instead of the TTC file. Original error: ${ttcError.message}`);
         }
       } else {
         // Regular TTF/OTF file - embed directly
