@@ -20,7 +20,7 @@ const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
 // === new flags ===
 const RESPECT_TEMPLATE_APPEARANCE =
-  String(process.env.RESPECT_TEMPLATE_APPEARANCE || 'false').toLowerCase() === 'true';
+  String(process.env.RESPECT_TEMPLATE_APPEARANCE || 'true').toLowerCase() === 'true';
 const FORCE_BURN_IN =
   String(process.env.FORCE_BURN_IN || 'true').toLowerCase() === 'true';
 
@@ -199,7 +199,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
   if (!RESPECT_TEMPLATE_APPEARANCE) {
     acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
-    acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    // TEMPORARILY DISABLED: This might be causing text cutoff issues
+    // acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    log('NeedAppearances disabled to prevent text cutoff');
   }
 
   // 3) fill
@@ -551,17 +553,29 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 6) save
+  // 6) save - Try different approaches to prevent text cutoff
   let outBytes;
   try {
+    // Approach 1: Try to preserve original field appearances completely
+    log('Attempting to save PDF with preserved field appearances...');
     outBytes = await pdfDoc.save({
       useObjectStreams: false,
       addDefaultPage: false,
       updateFieldAppearances: false,
+      objectsPerTick: 50,
     });
+    log('PDF saved successfully with preserved appearances');
   } catch (e) {
-    log('pdfDoc.save() failed, retry with defaults:', e.message);
-    outBytes = await pdfDoc.save();
+    log('First save attempt failed:', e.message);
+    try {
+      // Approach 2: Use default save options
+      log('Trying default save options...');
+      outBytes = await pdfDoc.save();
+      log('PDF saved with default options');
+    } catch (e2) {
+      log('All save attempts failed:', e2.message);
+      throw e2;
+    }
   }
 
   fs.writeFileSync(outPath, outBytes);
