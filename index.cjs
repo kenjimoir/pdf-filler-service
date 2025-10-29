@@ -162,11 +162,39 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   try {
     pdfDoc.registerFontkit(fontkit);
     
-    // Use FONT_TTF_PATH environment variable if set, otherwise default to filename in current dir
-    const fontFileName = process.env.FONT_TTF_PATH || 'HiraginoMinchoProN.ttc';
-    const fontPath = path.isAbsolute(fontFileName) 
-      ? fontFileName 
-      : path.join(__dirname, fontFileName);
+    // Use FONT_TTF_PATH environment variable if set, otherwise default to filename in fonts/ subdirectory
+    const fontFileName = process.env.FONT_TTF_PATH || 'fonts/HiraginoMinchoProN.ttc';
+    
+    // Try multiple possible locations for the font file
+    let fontPath = null;
+    const possiblePaths = [
+      // If FONT_TTF_PATH is set, try it as-is first (could be absolute or relative)
+      path.isAbsolute(fontFileName) ? fontFileName : path.join(__dirname, fontFileName),
+      // Fonts subdirectory (most common location)
+      path.join(__dirname, 'fonts', path.basename(fontFileName)),
+      // Same dir as index.cjs (legacy location)
+      path.join(__dirname, path.basename(fontFileName)),
+      // Current working directory
+      path.join(process.cwd(), fontFileName),
+      path.join(process.cwd(), 'fonts', path.basename(fontFileName)),
+      // Parent directory
+      path.join(__dirname, '..', fontFileName),
+      path.join(__dirname, '..', 'fonts', path.basename(fontFileName)),
+      // Root directory constant
+      path.join(ROOT, fontFileName),
+      path.join(ROOT, 'fonts', path.basename(fontFileName)),
+    ];
+    
+    for (const tryPath of possiblePaths) {
+      if (fs.existsSync(tryPath)) {
+        fontPath = tryPath;
+        break;
+      }
+    }
+    
+    if (!fontPath) {
+      fontPath = path.isAbsolute(fontFileName) ? fontFileName : path.join(__dirname, fontFileName);
+    }
     
     if (fs.existsSync(fontPath)) {
       log('Loading Japanese font from:', fontPath);
@@ -178,12 +206,16 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log('✅ Successfully embedded Hiragino Mincho ProN font');
       log(`   Font type: ${customFont ? 'loaded' : 'null'}, size: ${fontBytes.length} bytes`);
     } else {
-      log('❌ Font file not found at:', fontPath);
+      log('❌ Font file not found. Tried the following paths:');
+      for (const tryPath of possiblePaths) {
+        log(`   - ${tryPath} ${fs.existsSync(tryPath) ? '✅ EXISTS' : '❌ not found'}`);
+      }
       log('   FONT_TTF_PATH env var:', process.env.FONT_TTF_PATH || '(not set)');
       log('   __dirname:', __dirname);
       log('   Current working directory:', process.cwd());
-      log('   Make sure the font file is in the correct location');
-      throw new Error(`Font file not found: ${fontPath}`);
+      log('   ROOT constant:', ROOT);
+      log('   Make sure the font file is committed to GitHub in the same directory as index.cjs');
+      throw new Error(`Font file not found. Searched: ${possiblePaths.join(', ')}`);
     }
   } catch (e) {
     log('❌ Font embedding failed:', e.message);
