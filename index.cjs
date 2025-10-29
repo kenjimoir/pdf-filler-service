@@ -566,11 +566,46 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               log(`❌ Unchecked SameAsTraveler checkbox ${n} (no match for value: ${sameAsTravelerValue})`);
             }
           } else {
+            // Check for yes/no checkbox fields (TreatmentNow_yes, TreatmentNow_no, etc.)
+            const yesFieldMatch = n.match(/^(.+)_(yes|はい)$/);
+            const noFieldMatch = n.match(/^(.+)_(no|いいえ)$/);
+            
+            if (yesFieldMatch || noFieldMatch) {
+              const match = yesFieldMatch || noFieldMatch;
+              const baseName = match[1];
+              const fieldType = match[2];
+              
+              // Check if we have a value for the corresponding yes/no field
+              const oppositeType = fieldType.includes('yes') || fieldType.includes('はい') ? 
+                (n.replace(/_yes$|_はい$/, '_no').replace(/_yes$/, '_いいえ')) : 
+                (n.replace(/_no$|_いいえ$/, '_yes').replace(/_no$/, '_はい'));
+              
+              const fieldValue = String(single).trim();
+              const shouldCheck = fieldValue === 'on' || fieldValue === 'はい' || fieldValue === 'yes' || fieldValue === 'true';
+              
+              log(`Yes/No checkbox ${n}: baseName="${baseName}", fieldType="${fieldType}", fieldValue="${fieldValue}", shouldCheck=${shouldCheck}`);
+              
+              if (shouldCheck) {
+                f.check();
+                if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
+                  try { f.updateAppearances(customFont); } catch (_) {}
+                }
+                filled++;
+                log(`✅ Checked ${n}`);
+              } else {
+                f.uncheck();
+                if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
+                  try { f.updateAppearances(customFont); } catch (_) {}
+                }
+                log(`❌ Unchecked ${n}`);
+            }
+          } else {
             // For other non-numeric values, use the existing yes/no logic
             const yn = normalizeYesNo(single);
             if (yn === 'yes' || yn === 'on' || yn === '1' || yn === 'true') f.check();
             else f.uncheck();
             filled++;
+            }
           }
         }
         continue;
