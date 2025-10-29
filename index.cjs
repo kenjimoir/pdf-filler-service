@@ -457,8 +457,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 4) Burn-in (optional)
-  if (FORCE_BURN_IN && !RESPECT_TEMPLATE_APPEARANCE) {
+  // 4) Burn-in (optional) - TEMPORARILY DISABLED due to text cutoff issues
+  if (false && FORCE_BURN_IN && !RESPECT_TEMPLATE_APPEARANCE) {
     try {
       let burned = 0;
       for (const f of allFields) {
@@ -471,9 +471,15 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         if ((!ctor.includes('Text') && !ctor.includes('Dropdown')) || !raw) continue;
 
         // Skip burn-in for problematic fields that have auto-sizing in template
-        if (name.includes('代理店') || name.includes('Agent') || name.includes('Code')) {
+        if (name.includes('代理店') || name.includes('Agent') || name.includes('Code') || 
+            name.includes('扱者') || name.includes('仲立人') || name.includes('コード')) {
           log(`Skipping burn-in for field "${name}" to preserve template auto-sizing`);
           continue;
+        }
+        
+        // Debug: Log all field names being processed for burn-in
+        if (raw && raw.length > 10) {
+          log(`Burn-in processing field "${name}" with text: "${raw}"`);
         }
 
         const widgets = (f.acroField && f.acroField.getWidgets) ? f.acroField.getWidgets() : [];
@@ -525,6 +531,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     } catch (e) {
       log('Burn-in fallback failed:', e && e.message);
     }
+  } else {
+    log('Burn-in disabled to prevent text cutoff issues - using template auto-sizing');
   }
 
   // 5) watermark (optional)
