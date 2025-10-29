@@ -207,9 +207,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   acroForm.set(PDFName.of('DR'), dr);
 
     // Set default appearance with custom font
-    // Note: NeedAppearances set to False to preserve template auto-sizing
+    // Note: updateFieldAppearances: false on save preserves template auto-sizing
     acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
-    acroForm.set(PDFName.of('NeedAppearances'), PDFBool.of(false));
+    // NeedAppearances not set - let template's original value remain (avoid PDFBool API issues)
     
     log('Helvetica font embedding enabled');
   } else {
