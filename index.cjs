@@ -270,9 +270,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
-        // Update appearances with custom font if available
-        if (customFont) {
+        // Skip updateAppearances for address fields to preserve template auto-sizing
+        const isAddressField = name.includes('Address') || name.includes('住所') || name.includes('FullAddress');
+        if (customFont && !isAddressField) {
           try { f.updateAppearances(customFont); } catch (_) {}
+        } else if (isAddressField) {
+          log(`Skipping updateAppearances for address field "${name}" to preserve template auto-sizing`);
         }
         filled++;
         if (name === 'DestinationOtherText') {
@@ -807,7 +810,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
         // Skip burn-in for problematic fields that have auto-sizing in template
         if (name.includes('代理店') || name.includes('Agent') || name.includes('Code') || 
-            name.includes('扱者') || name.includes('仲立人') || name.includes('コード')) {
+            name.includes('扱者') || name.includes('仲立人') || name.includes('コード') ||
+            name.includes('Address') || name.includes('住所') || name.includes('FullAddress')) {
           log(`Skipping burn-in for field "${name}" to preserve template auto-sizing`);
           continue;
         }
