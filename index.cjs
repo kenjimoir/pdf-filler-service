@@ -1,5 +1,6 @@
 const express = require('express');
 const { PDFDocument, PDFName, PDFString, PDFBool } = require('pdf-lib');
+const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
@@ -9,6 +10,23 @@ const ROOT = process.env.ROOT || __dirname;
 
 // Simple logging function
 const log = (...args) => console.log(new Date().toISOString(), '-', ...args);
+
+// Google Drive client
+function getDriveClient() {
+  let credentials = null;
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    try { 
+      credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON); 
+    } catch (e) {
+      log('ERROR parsing GOOGLE_CREDENTIALS_JSON:', e && e.message);
+    }
+  }
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/drive'],
+  });
+  return google.drive({ version: 'v3', auth });
+}
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -25,35 +43,6 @@ function normalizeYesNo(value) {
   return 'no';
 }
 
-// Create multipart body for Google Drive upload
-function createMultipartBody(fileBytes, fileName, folderId) {
-  const boundary = '----WebKitFormBoundary' + Math.random().toString(16).substr(2);
-  const metadata = {
-    name: fileName,
-    parents: folderId ? [folderId] : undefined,
-  };
-  
-  const body = [
-    `--${boundary}`,
-    'Content-Disposition: form-data; name="metadata"',
-    'Content-Type: application/json',
-    '',
-    JSON.stringify(metadata),
-    `--${boundary}`,
-    'Content-Disposition: form-data; name="file"',
-    'Content-Type: application/pdf',
-    '',
-    fileBytes,
-    `--${boundary}--`,
-  ].join('\r\n');
-  
-  return {
-    body: Buffer.from(body),
-    headers: {
-      'Content-Type': `multipart/related; boundary=${boundary}`,
-    },
-  };
-}
 
 app.post('/fill', async (req, res) => {
   try {
@@ -71,16 +60,16 @@ app.post('/fill', async (req, res) => {
 
     // Download template from Google Drive
     log('Downloading template from Google Drive...');
-    const templateResponse = await fetch(`https://www.googleapis.com/drive/v3/files/${templateFileId}?alt=media`, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-      },
+    const drive = getDriveClient();
+    const templateResponse = await drive.files.get({
+      fileId: templateFileId,
+      alt: 'media',
+      supportsAllDrives: true,
+    }, {
+      responseType: 'arraybuffer',
     });
     
-    if (!templateResponse.ok) {
-      throw new Error(`Failed to download template: ${templateResponse.status}`);
-    }
-    const templateBytes = await templateResponse.arrayBuffer();
+    const templateBytes = templateResponse.data;
     log('Template downloaded, size:', templateBytes.byteLength);
 
     // Load PDF
@@ -152,27 +141,27 @@ app.post('/fill', async (req, res) => {
 
     // Upload to Google Drive
     log('Starting upload to Google Drive...');
-    const multipartData = createMultipartBody(pdfBytes, outputName || 'filled.pdf', folderId);
-    const uploadResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        ...multipartData.headers,
+    const drive = getDriveClient();
+    const fileMetadata = {
+      name: outputName || 'filled.pdf',
+      parents: folderId ? [folderId] : undefined,
+    };
+    
+    const uploadResult = await drive.files.create({
+      requestBody: fileMetadata,
+      media: {
+        mimeType: 'application/pdf',
+        body: Buffer.from(pdfBytes),
       },
-      body: multipartData.body,
+      fields: 'id, name, webViewLink',
+      supportsAllDrives: true,
     });
-
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      throw new Error(`Upload failed: ${uploadResponse.status} - ${errorText}`);
-    }
-
-    const uploadResult = await uploadResponse.json();
-    log('PDF uploaded successfully, file ID:', uploadResult.id);
+    
+    log('PDF uploaded successfully, file ID:', uploadResult.data.id);
 
     res.json({
       success: true,
-      fileId: uploadResult.id,
+      fileId: uploadResult.data.id,
       fieldsProcessed: filled,
     });
 
