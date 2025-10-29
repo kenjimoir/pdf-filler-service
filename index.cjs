@@ -20,9 +20,9 @@ const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
 // === new flags ===
 const RESPECT_TEMPLATE_APPEARANCE =
-  String(process.env.RESPECT_TEMPLATE_APPEARANCE || 'true').toLowerCase() === 'true';
+  String(process.env.RESPECT_TEMPLATE_APPEARANCE || 'false').toLowerCase() === 'true';
 const FORCE_BURN_IN =
-  String(process.env.FORCE_BURN_IN || 'false').toLowerCase() === 'true';
+  String(process.env.FORCE_BURN_IN || 'true').toLowerCase() === 'true';
 
 function log(...args) {
   console.log(new Date().toISOString(), '-', ...args);
