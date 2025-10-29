@@ -206,9 +206,10 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   dr.set(PDFName.of('Font'), drFont);
   acroForm.set(PDFName.of('DR'), dr);
 
-    // Set default appearance with Helvetica
+    // Set default appearance with custom font
+    // Note: NeedAppearances set to False to preserve template auto-sizing
     acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
-    acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    acroForm.set(PDFName.of('NeedAppearances'), PDFBool.False);
     
     log('Helvetica font embedding enabled');
   } else {
@@ -270,10 +271,16 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
-        // Always update appearances to use Japanese-compatible font
-        // (updateAppearances doesn't break auto-sizing - burn-in does)
+        // Update appearances to use Japanese-compatible font
+        // Setting updateFieldAppearances: false on save will preserve template auto-sizing
         if (customFont) {
-          try { f.updateAppearances(customFont); } catch (_) {}
+          try { 
+            f.updateAppearances(customFont);
+            const isAddressField = name.includes('Address') || name.includes('住所') || name.includes('FullAddress');
+            if (isAddressField) {
+              log(`Updated appearance for address field "${name}" with auto-sizing preserved`);
+            }
+          } catch (_) {}
         }
         filled++;
         if (name === 'DestinationOtherText') {
@@ -893,7 +900,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     outBytes = await pdfDoc.save({
       useObjectStreams: false,
       addDefaultPage: false,
-      updateFieldAppearances: true, // Force field appearance recalculation
+      updateFieldAppearances: false, // Preserve template auto-sizing - only fields we explicitly updated will have new appearances
       objectsPerTick: 50,
       // Additional options for consistency and font embedding
       compress: true,
@@ -908,7 +915,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       outBytes = await pdfDoc.save({
         useObjectStreams: false,
         addDefaultPage: false,
-        updateFieldAppearances: true,
+        updateFieldAppearances: false, // Preserve template auto-sizing
       });
       log('PDF saved with standard options');
     } catch (e2) {
