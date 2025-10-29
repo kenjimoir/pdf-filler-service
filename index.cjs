@@ -203,22 +203,40 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       
       // TTC (TrueType Collection) files are NOT supported by pdf-lib
       // They embed "successfully" but result in an invalid font object
+      // Auto-fallback to OTF font if TTC is detected
       if (fontPath.toLowerCase().endsWith('.ttc')) {
-        log('   ❌ TTC (TrueType Collection) files are NOT supported by pdf-lib');
-        log('   💡 TTC files appear to embed but create invalid font objects');
-        log('   💡 SOLUTION: Update FONT_TTF_PATH in Render environment variables to use an OTF/TTF font:');
-        log('      Option 1: Remove FONT_TTF_PATH (will use default: fonts/NotoSansCJKjp-Regular.otf)');
-        log('      Option 2: Set FONT_TTF_PATH=fonts/NotoSansCJKjp-Regular.otf');
-        log('      Option 3: Set FONT_TTF_PATH=fonts/NotoSansJP-Regular.ttf');
-        throw new Error('TTC files are not supported. Please update FONT_TTF_PATH in Render to use an OTF or TTF font file instead of the TTC file.');
+        log('   ⚠️ TTC (TrueType Collection) files are NOT supported by pdf-lib');
+        log('   💡 Automatically falling back to OTF font: fonts/NotoSansCJKjp-Regular.otf');
+        
+        // Try to load the fallback OTF font instead
+        const fallbackFontPath = path.join(__dirname, 'fonts', 'NotoSansCJKjp-Regular.otf');
+        if (fs.existsSync(fallbackFontPath)) {
+          log(`   ✅ Found fallback font at: ${fallbackFontPath}`);
+          const fallbackBytes = fs.readFileSync(fallbackFontPath);
+          customFont = await pdfDoc.embedFont(fallbackBytes);
+          log('✅ Successfully embedded fallback OTF font');
+          log(`   Font file size: ${fallbackBytes.length} bytes`);
+        } else {
+          // Try alternative fallback
+          const altFallback = path.join(__dirname, 'fonts', 'NotoSansJP-Regular.ttf');
+          if (fs.existsSync(altFallback)) {
+            log(`   ✅ Found alternative fallback font at: ${altFallback}`);
+            const altBytes = fs.readFileSync(altFallback);
+            customFont = await pdfDoc.embedFont(altBytes);
+            log('✅ Successfully embedded alternative fallback TTF font');
+            log(`   Font file size: ${altBytes.length} bytes`);
+          } else {
+            throw new Error('TTC files are not supported and no fallback OTF/TTF fonts found. Please add NotoSansCJKjp-Regular.otf or NotoSansJP-Regular.ttf to the fonts/ directory, or update FONT_TTF_PATH in Render.');
+          }
+        }
+      } else {
+        // Regular TTF/OTF file - embed directly
+        customFont = await pdfDoc.embedFont(fontBytes);
+        log('✅ Successfully embedded font');
+        log(`   Font file size: ${fontBytes.length} bytes`);
       }
       
-      // Regular TTF/OTF file - embed directly
-      customFont = await pdfDoc.embedFont(fontBytes);
-      log('✅ Successfully embedded font');
-      log(`   Font file size: ${fontBytes.length} bytes`);
-      
-      // Verify the font object has the required methods
+      // Verify the font object has the required methods (for both TTC fallback and regular fonts)
       if (!customFont || typeof customFont.encode !== 'function') {
         throw new Error(`Embedded font object is invalid - missing encode() method. This usually means the font file format is not supported. Use OTF or TTF format instead.`);
       }
