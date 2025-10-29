@@ -209,6 +209,24 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const valueBy = buildAliasView(fields);
   let filled = 0;
 
+  // Debug: Log all field names and export values to help identify the correct field names
+  log('===== ALL PDF FIELD NAMES AND EXPORT VALUES =====');
+  for (const f of allFields) {
+    const name = f.getName ? f.getName() : '';
+    const ctor = f.constructor && f.constructor.name || '';
+    let exportValues = '';
+    if (ctor.includes('Check') && f.getExportValues) {
+      try {
+        const exports = f.getExportValues();
+        exportValues = ` [exportValues: ${exports.join(', ')}]`;
+      } catch (e) {
+        exportValues = ` [exportValues: error - ${e.message}]`;
+      }
+    }
+    log(`Field: "${name}" (${ctor})${exportValues}`);
+  }
+  log('===== END FIELD NAMES =====');
+
   for (const f of allFields) {
     const name = f.getName ? f.getName() : '';
     const ctor = f.constructor && f.constructor.name || '';
@@ -219,24 +237,50 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log(`Debug field ${name}: valRaw="${valRaw}", ctor="${ctor}"`);
     }
 
-    // Handle CoverageValue as checkbox field
-    if (name === 'CoverageValue' && ctor.includes('Check')) {
-      log(`CoverageValue checkbox: value="${valRaw}"`);
-      if (valRaw === '月' || valRaw === '日') {
-        f.check();
-        if (!RESPECT_TEMPLATE_APPEARANCE) {
-          try { f.updateAppearances(customFont); } catch (_) {}
+    // Handle checkboxes with same field name but different export values
+    if (ctor.includes('Check')) {
+      // Handle CoverageValue checkboxes with export values (日/月)
+      if (name === 'CoverageValue') {
+        try {
+          // Get the export value of this specific checkbox
+          const exportValue = f.getExportValues ? f.getExportValues()[0] : '';
+          log(`CoverageValue checkbox: fieldName="${name}", exportValue="${exportValue}", inputValue="${fields.CoverageValue}"`);
+          
+          // Check if this checkbox's export value matches the input value
+          if (exportValue === fields.CoverageValue) {
+            f.check();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { f.updateAppearances(customFont); } catch (_) {}
+            }
+            filled++;
+            log(`✅ Checked CoverageValue checkbox (exportValue: ${exportValue} matches input: ${fields.CoverageValue})`);
+          } else {
+            f.uncheck();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { f.updateAppearances(customFont); } catch (_) {}
+            }
+            log(`❌ Unchecked CoverageValue checkbox (exportValue: ${exportValue} does not match input: ${fields.CoverageValue})`);
+          }
+        } catch (e) {
+          log(`Error handling CoverageValue checkbox: ${e.message}`);
+          // Fallback to old behavior
+          if (valRaw === '月' || valRaw === '日') {
+            f.check();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { f.updateAppearances(customFont); } catch (_) {}
+            }
+            filled++;
+            log(`✅ Checked CoverageValue checkbox (fallback, value: ${valRaw})`);
+          } else {
+            f.uncheck();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { f.updateAppearances(customFont); } catch (_) {}
+            }
+            log(`❌ Unchecked CoverageValue checkbox (fallback, no match for value: ${valRaw})`);
+          }
         }
-        filled++;
-        log(`✅ Checked CoverageValue checkbox (value: ${valRaw})`);
-      } else {
-        f.uncheck();
-        if (!RESPECT_TEMPLATE_APPEARANCE) {
-          try { f.updateAppearances(customFont); } catch (_) {}
-        }
-        log(`❌ Unchecked CoverageValue checkbox (no match for value: ${valRaw})`);
+        continue;
       }
-      continue;
     }
 
     if (ctor.includes('Text')) {
@@ -376,7 +420,33 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           } else if (isTravelerSexField) {
             log(`TravelerSex checkbox ${n}: value="${travelerSexValue}"`);
             
-            // Check if this field should be checked based on the value
+            // Handle gender checkboxes with same field name but different export values
+            try {
+              const exportValue = f.getExportValues ? f.getExportValues()[0] : '';
+              log(`TravelerSex checkbox: fieldName="${n}", exportValue="${exportValue}", inputValue="${travelerSexValue}"`);
+              
+              // Check if this checkbox's export value matches the input value
+              if (exportValue === travelerSexValue) {
+                f.check();
+                if (!RESPECT_TEMPLATE_APPEARANCE) {
+                  try { f.updateAppearances(customFont); } catch (_) {}
+                }
+                filled++;
+                log(`✅ Checked TravelerSex checkbox (exportValue: ${exportValue} matches input: ${travelerSexValue})`);
+                continue;
+              } else {
+                f.uncheck();
+                if (!RESPECT_TEMPLATE_APPEARANCE) {
+                  try { f.updateAppearances(customFont); } catch (_) {}
+                }
+                log(`❌ Unchecked TravelerSex checkbox (exportValue: ${exportValue} does not match input: ${travelerSexValue})`);
+                continue;
+              }
+            } catch (e) {
+              log(`Error handling TravelerSex checkbox export values: ${e.message}`);
+            }
+            
+            // Fallback to old behavior if export value handling fails
             const shouldCheck = (
               // Handle explicit field names (if you rename them)
               (n === 'TravelerSex_男性' && travelerSexValue === 'yes') ||
