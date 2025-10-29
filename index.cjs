@@ -194,17 +194,17 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
   // 2) AcroForm default appearance (only if custom font is available)
   if (customFont) {
-    let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
-    let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
-    if (!acroForm) {
-      acroForm = pdfDoc.context.obj({});
-      pdfDoc.catalog.set(PDFName.of('AcroForm'), acroForm);
-    }
-    const dr = acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({});
-    const drFont = dr.get(PDFName.of('Font')) || pdfDoc.context.obj({});
-    drFont.set(PDFName.of('F0'), customFont.ref);
-    dr.set(PDFName.of('Font'), drFont);
-    acroForm.set(PDFName.of('DR'), dr);
+  let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
+  let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
+  if (!acroForm) {
+    acroForm = pdfDoc.context.obj({});
+    pdfDoc.catalog.set(PDFName.of('AcroForm'), acroForm);
+  }
+  const dr = acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({});
+  const drFont = dr.get(PDFName.of('Font')) || pdfDoc.context.obj({});
+  drFont.set(PDFName.of('F0'), customFont.ref);
+  dr.set(PDFName.of('Font'), drFont);
+  acroForm.set(PDFName.of('DR'), dr);
 
     // Set default appearance with Helvetica
     acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
@@ -807,7 +807,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log('Standard save failed, trying minimal options:', e2.message);
       try {
         // Minimal save options as last resort
-        outBytes = await pdfDoc.save();
+    outBytes = await pdfDoc.save();
         log('PDF saved with minimal options');
       } catch (e3) {
         log('All save attempts failed:', e3.message);
@@ -817,7 +817,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   }
 
   fs.writeFileSync(outPath, outBytes);
-  return { outPath, filled, size: outBytes.length, fontPath: chosenFontPath };
+  return { outPath, filled, size: outBytes.length };
 }
 
 /* ---------------- HTTP server ---------------- */
