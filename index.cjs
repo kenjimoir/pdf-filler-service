@@ -209,6 +209,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const valueBy = buildAliasView(fields);
   let filled = 0;
 
+  // TEMPORARY: Disable export value checking to prevent crashes
+  const USE_EXPORT_VALUE_CHECKING = false;
+
   // Debug: Log all field names and export values to help identify the correct field names
   log('===== ALL PDF FIELD NAMES AND EXPORT VALUES =====');
   for (const f of allFields) {
@@ -239,9 +242,6 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     // Handle checkboxes with same field name but different export values
     if (ctor.includes('Check')) {
-      // TEMPORARY: Disable export value checking to prevent crashes
-      const USE_EXPORT_VALUE_CHECKING = false;
-      
       // Handle CoverageValue checkboxes with export values (日/月)
       if (name === 'CoverageValue') {
         if (USE_EXPORT_VALUE_CHECKING) {
