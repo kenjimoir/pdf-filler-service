@@ -201,37 +201,26 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log('Loading Japanese font from:', fontPath);
       const fontBytes = fs.readFileSync(fontPath);
       
-      // Handle TTC (TrueType Collection) files
+      // TTC (TrueType Collection) files are NOT supported by pdf-lib
+      // They embed "successfully" but result in an invalid font object
       if (fontPath.toLowerCase().endsWith('.ttc')) {
-        log('   Detected TTC file (TrueType Collection)...');
-        log('   ⚠️ TTC files are complex - pdf-lib may not support them directly');
-        log('   Attempting to embed TTC directly (may not work)...');
-        
-        try {
-          // Try embedding TTC directly - pdf-lib with fontkit might handle it
-          // But this often fails, so we'll catch and suggest alternative
-          customFont = await pdfDoc.embedFont(fontBytes);
-          log('✅ Successfully embedded TTC file');
-        } catch (ttcError) {
-          log(`   ❌ TTC embedding failed: ${ttcError.message}`);
-          log(`   💡 TTC (TrueType Collection) files are not well-supported by pdf-lib`);
-          log(`   💡 RECOMMENDED: Update FONT_TTF_PATH to use an OTF or TTF font instead:`);
-          log(`      - fonts/NotoSansCJKjp-Regular.otf (recommended)`);
-          log(`      - fonts/NotoSansJP-Regular.ttf`);
-          log(`      - Or remove FONT_TTF_PATH to use the default OTF font`);
-          throw new Error(`TTC files are not supported by pdf-lib. Please use FONT_TTF_PATH=fonts/NotoSansCJKjp-Regular.otf instead of the TTC file. Original error: ${ttcError.message}`);
-        }
-      } else {
-        // Regular TTF/OTF file - embed directly
-        customFont = await pdfDoc.embedFont(fontBytes);
-        log('✅ Successfully embedded font');
+        log('   ❌ TTC (TrueType Collection) files are NOT supported by pdf-lib');
+        log('   💡 TTC files appear to embed but create invalid font objects');
+        log('   💡 SOLUTION: Update FONT_TTF_PATH in Render environment variables to use an OTF/TTF font:');
+        log('      Option 1: Remove FONT_TTF_PATH (will use default: fonts/NotoSansCJKjp-Regular.otf)');
+        log('      Option 2: Set FONT_TTF_PATH=fonts/NotoSansCJKjp-Regular.otf');
+        log('      Option 3: Set FONT_TTF_PATH=fonts/NotoSansJP-Regular.ttf');
+        throw new Error('TTC files are not supported. Please update FONT_TTF_PATH in Render to use an OTF or TTF font file instead of the TTC file.');
       }
       
-      log(`   Font object: ${customFont ? 'valid' : 'null'}, original file size: ${fontBytes.length} bytes`);
+      // Regular TTF/OTF file - embed directly
+      customFont = await pdfDoc.embedFont(fontBytes);
+      log('✅ Successfully embedded font');
+      log(`   Font file size: ${fontBytes.length} bytes`);
       
       // Verify the font object has the required methods
       if (!customFont || typeof customFont.encode !== 'function') {
-        throw new Error('Embedded font object is invalid - missing required methods');
+        throw new Error(`Embedded font object is invalid - missing encode() method. This usually means the font file format is not supported. Use OTF or TTF format instead.`);
       }
     } else {
       log('❌ Font file not found. Tried the following paths:');
