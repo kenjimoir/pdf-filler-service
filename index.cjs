@@ -211,6 +211,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
   // Re-enable export value checking with robust error handling
   const USE_EXPORT_VALUE_CHECKING = true;
+  
+  // Collect checkboxes by name for batch processing
+  const checkboxGroups = {};
 
   // Debug: Log all field names and export values to help identify the correct field names
   log('===== ALL PDF FIELD NAMES AND EXPORT VALUES =====');
@@ -240,128 +243,16 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log(`Debug field ${name}: valRaw="${valRaw}", ctor="${ctor}"`);
     }
 
-    // Handle checkboxes with same field name but different export values
+    // Collect checkboxes for batch processing
     if (ctor.includes('Check')) {
-      // Handle CoverageValue checkboxes with export values (日/月)
-      if (name === 'CoverageValue') {
-        if (USE_EXPORT_VALUE_CHECKING) {
-        try {
-          // Get the export value of this specific checkbox - improved method
-          let exportValue = '';
-          try {
-            // Method 1: Try getExportValues() function
-            if (f.getExportValues && typeof f.getExportValues === 'function') {
-              const exports = f.getExportValues();
-              exportValue = exports && exports.length > 0 ? exports[0] : '';
-              log(`Method 1 (getExportValues): ${exportValue}`);
-            }
-            
-            // Method 2: Try exportValues property
-            if (!exportValue && f.exportValues && f.exportValues.length > 0) {
-              exportValue = f.exportValues[0];
-              log(`Method 2 (exportValues): ${exportValue}`);
-            }
-            
-            // Method 3: Try options property
-            if (!exportValue && f.options && f.options.length > 0) {
-              exportValue = f.options[0];
-              log(`Method 3 (options): ${exportValue}`);
-            }
-            
-            // Method 4: Try to get from widget properties
-            if (!exportValue) {
-              try {
-                const widgets = f.acroField && f.acroField.getWidgets ? f.acroField.getWidgets() : [];
-                if (widgets.length > 0) {
-                  const widget = widgets[0];
-                  if (widget && widget.getOnValue) {
-                    const onValue = widget.getOnValue();
-                    if (onValue && onValue.asString) {
-                      exportValue = onValue.asString();
-                      log(`Method 4 (widget OnValue): ${exportValue}`);
-                    }
-                  }
-                }
-              } catch (widgetError) {
-                log(`Method 4 failed: ${widgetError.message}`);
-              }
-            }
-            
-            // Method 5: Try to get from field properties
-            if (!exportValue) {
-              try {
-                if (f.acroField && f.acroField.getOnValue) {
-                  const onValue = f.acroField.getOnValue();
-                  if (onValue && onValue.asString) {
-                    exportValue = onValue.asString();
-                    log(`Method 5 (acroField OnValue): ${exportValue}`);
-                  }
-                }
-              } catch (acroError) {
-                log(`Method 5 failed: ${acroError.message}`);
-              }
-            }
-            
-          } catch (exportError) {
-            log(`Warning: Could not get export value for ${name}: ${exportError.message}`);
-            exportValue = '';
-          }
-          
-          log(`CoverageValue checkbox: fieldName="${name}", exportValue="${exportValue}", inputValue="${fields.CoverageValue}"`);
-          
-          // Check if this checkbox's export value matches the input value
-          if (exportValue === fields.CoverageValue) {
-            f.check();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { f.updateAppearances(customFont); } catch (_) {}
-            }
-            filled++;
-            log(`✅ Checked CoverageValue checkbox (exportValue: ${exportValue} matches input: ${fields.CoverageValue})`);
-          } else {
-            f.uncheck();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { f.updateAppearances(customFont); } catch (_) {}
-            }
-            log(`❌ Unchecked CoverageValue checkbox (exportValue: ${exportValue} does not match input: ${fields.CoverageValue})`);
-          }
-        } catch (e) {
-          log(`Error handling CoverageValue checkbox: ${e.message}`);
-          // Fallback to old behavior
-          if (valRaw === '月' || valRaw === '日') {
-            f.check();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { f.updateAppearances(customFont); } catch (_) {}
-            }
-            filled++;
-            log(`✅ Checked CoverageValue checkbox (fallback, value: ${valRaw})`);
-          } else {
-            f.uncheck();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { f.updateAppearances(customFont); } catch (_) {}
-            }
-            log(`❌ Unchecked CoverageValue checkbox (fallback, no match for value: ${valRaw})`);
-          }
-        }
-        } else {
-          // Fallback to simple checkbox logic when export value checking is disabled
-          log(`CoverageValue checkbox (fallback mode): fieldName="${name}", inputValue="${fields.CoverageValue}"`);
-          if (fields.CoverageValue === '月' || fields.CoverageValue === '日') {
-            f.check();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { f.updateAppearances(customFont); } catch (_) {}
-            }
-            filled++;
-            log(`✅ Checked CoverageValue checkbox (fallback, value: ${fields.CoverageValue})`);
-          } else {
-            f.uncheck();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { f.updateAppearances(customFont); } catch (_) {}
-            }
-            log(`❌ Unchecked CoverageValue checkbox (fallback, no match for value: ${fields.CoverageValue})`);
-          }
-        }
-        continue;
+      // Debug: Log all checkbox fields
+      log(`Found checkbox: name="${name}", valRaw="${valRaw}"`);
+      
+      if (!checkboxGroups[name]) {
+        checkboxGroups[name] = [];
       }
+      checkboxGroups[name].push(f);
+      continue; // Skip individual processing for now
     }
 
     if (ctor.includes('Text')) {
@@ -673,6 +564,89 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       }
     }
   }
+
+  // Process checkbox groups
+  log('===== PROCESSING CHECKBOX GROUPS =====');
+  for (const [groupName, checkboxes] of Object.entries(checkboxGroups)) {
+    log(`Processing checkbox group: ${groupName} (${checkboxes.length} checkboxes)`);
+    
+    if (groupName === 'CoverageValue') {
+      const targetValue = fields.CoverageValue;
+      log(`CoverageValue group: looking for value "${targetValue}"`);
+      
+      for (const checkbox of checkboxes) {
+        try {
+          // Try to get export value
+          let exportValue = '';
+          try {
+            if (checkbox.getExportValues && typeof checkbox.getExportValues === 'function') {
+              const exports = checkbox.getExportValues();
+              exportValue = exports && exports.length > 0 ? exports[0] : '';
+            }
+          } catch (e) {
+            log(`Could not get export value for ${groupName}: ${e.message}`);
+          }
+          
+          log(`CoverageValue checkbox: exportValue="${exportValue}", targetValue="${targetValue}"`);
+          
+          if (exportValue === targetValue) {
+            checkbox.check();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { checkbox.updateAppearances(customFont); } catch (_) {}
+            }
+            filled++;
+            log(`✅ Checked CoverageValue checkbox (exportValue: ${exportValue})`);
+          } else {
+            checkbox.uncheck();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { checkbox.updateAppearances(customFont); } catch (_) {}
+            }
+            log(`❌ Unchecked CoverageValue checkbox (exportValue: ${exportValue})`);
+          }
+        } catch (e) {
+          log(`Error processing CoverageValue checkbox: ${e.message}`);
+        }
+      }
+    } else if (groupName === 'TravelerSex') {
+      const targetValue = fields.TravelerSex;
+      log(`TravelerSex group: looking for value "${targetValue}"`);
+      
+      for (const checkbox of checkboxes) {
+        try {
+          // Try to get export value
+          let exportValue = '';
+          try {
+            if (checkbox.getExportValues && typeof checkbox.getExportValues === 'function') {
+              const exports = checkbox.getExportValues();
+              exportValue = exports && exports.length > 0 ? exports[0] : '';
+            }
+          } catch (e) {
+            log(`Could not get export value for ${groupName}: ${e.message}`);
+          }
+          
+          log(`TravelerSex checkbox: exportValue="${exportValue}", targetValue="${targetValue}"`);
+          
+          if (exportValue === targetValue) {
+            checkbox.check();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { checkbox.updateAppearances(customFont); } catch (_) {}
+            }
+            filled++;
+            log(`✅ Checked TravelerSex checkbox (exportValue: ${exportValue})`);
+          } else {
+            checkbox.uncheck();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { checkbox.updateAppearances(customFont); } catch (_) {}
+            }
+            log(`❌ Unchecked TravelerSex checkbox (exportValue: ${exportValue})`);
+          }
+        } catch (e) {
+          log(`Error processing TravelerSex checkbox: ${e.message}`);
+        }
+      }
+    }
+  }
+  log('===== END CHECKBOX GROUPS =====');
 
   // 4) Burn-in (optional) - Re-enabled with improved text handling for consistency
   if (FORCE_BURN_IN && !RESPECT_TEMPLATE_APPEARANCE) {
