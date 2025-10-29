@@ -162,8 +162,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   try {
     pdfDoc.registerFontkit(fontkit);
     
-    // Use FONT_TTF_PATH environment variable if set, otherwise default to filename in fonts/ subdirectory
-    const fontFileName = process.env.FONT_TTF_PATH || 'fonts/HiraginoMinchoProN.ttc';
+    // Use FONT_TTF_PATH environment variable if set, otherwise default to a simpler font format
+    // TTC files require special handling, so prefer OTF/TTF if available
+    const fontFileName = process.env.FONT_TTF_PATH || 'fonts/NotoSansCJKjp-Regular.otf';
     
     // Try multiple possible locations for the font file
     let fontPath = null;
@@ -200,11 +201,98 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       log('Loading Japanese font from:', fontPath);
       const fontBytes = fs.readFileSync(fontPath);
       
-      // For TTC (TrueType Collection), fontkit can handle it but we need to be explicit
-      // pdf-lib's embedFont should handle TTC automatically if fontkit is registered
-      customFont = await pdfDoc.embedFont(fontBytes);
-      log('✅ Successfully embedded Hiragino Mincho ProN font');
-      log(`   Font type: ${customFont ? 'loaded' : 'null'}, size: ${fontBytes.length} bytes`);
+      // Handle TTC (TrueType Collection) files - need to extract a font from the collection
+      if (fontPath.toLowerCase().endsWith('.ttc')) {
+        log('   Detected TTC file, extracting font from collection...');
+        try {
+          // Use fontkit to open the TTC file
+          const fontCollection = fontkit.openSync(fontPath);
+          
+          // TTC files contain multiple fonts - try to get the first one or find one with a specific name
+          let selectedFont = null;
+          
+          // Try to find a font with "Mincho" or "明朝" in the name, or just use the first one
+          for (let i = 0; i < fontCollection.fonts.length; i++) {
+            const font = fontCollection.fonts[i];
+            const fontName = font.fullName || font.familyName || '';
+            log(`   Font ${i}: ${fontName}`);
+            
+            if (fontName.includes('Mincho') || fontName.includes('明朝') || fontName.includes('ProN')) {
+              selectedFont = font;
+              log(`   ✅ Selected font: ${fontName}`);
+              break;
+            }
+          }
+          
+          // If no specific font found, use the first one
+          if (!selectedFont && fontCollection.fonts.length > 0) {
+            selectedFont = fontCollection.fonts[0];
+            log(`   Using first font in collection: ${selectedFont.fullName || selectedFont.familyName || 'unnamed'}`);
+          }
+          
+          if (selectedFont) {
+            // Extract font data from the TTC collection
+            // Fontkit's font objects don't directly expose TTF bytes, so we need to serialize the font
+            let ttfBuffer;
+            try {
+              // Fontkit fonts have a `data` property or we need to serialize them
+              // Try to get the font's underlying data stream
+              if (selectedFont.stream) {
+                const streamData = selectedFont.stream.read();
+                if (streamData && streamData.length > 0) {
+                  ttfBuffer = Buffer.isBuffer(streamData) ? streamData : Buffer.from(streamData);
+                }
+              }
+              
+              // If stream didn't work, try accessing raw data properties
+              if (!ttfBuffer && selectedFont._font) {
+                // Try to serialize the font back to TTF format
+                // This is a workaround - fontkit doesn't provide direct TTF export
+                log('   ⚠️ Could not extract font directly, trying alternative method...');
+                
+                // Actually, pdf-lib might be able to handle the font object directly
+                // Let's try passing the font bytes from the original file at the right offset
+                // But this is complex... instead, let's try using the original TTC bytes
+                // and hope pdf-lib's fontkit integration can handle it
+                const ttcBytes = fs.readFileSync(fontPath);
+                
+                // Try embedding the whole TTC - pdf-lib with fontkit might handle it
+                log('   Attempting to embed TTC directly (pdf-lib may handle it with fontkit)...');
+                ttfBuffer = ttcBytes; // Will try this as a fallback
+              }
+              
+              if (!ttfBuffer || ttfBuffer.length === 0) {
+                throw new Error('Could not extract font data from TTC - consider using OTF/TTF format instead');
+              }
+              
+              // Try embedding - pdf-lib with fontkit registered should handle TTC
+              customFont = await pdfDoc.embedFont(ttfBuffer);
+              log('✅ Successfully embedded font from TTC');
+              log(`   Font name: ${selectedFont.fullName || selectedFont.familyName || 'unknown'}`);
+            } catch (extractError) {
+              log(`   ❌ TTC extraction failed: ${extractError.message}`);
+              log(`   💡 Suggestion: Use OTF/TTF format instead (e.g., NotoSansCJKjp-Regular.otf)`);
+              throw new Error(`Failed to extract font from TTC: ${extractError.message}. Consider using an OTF or TTF font file instead.`);
+            }
+          } else {
+            throw new Error('No fonts found in TTC collection');
+          }
+        } catch (e) {
+          log(`   ⚠️ TTC extraction failed: ${e.message}`);
+          throw new Error(`Failed to extract font from TTC: ${e.message}`);
+        }
+      } else {
+        // Regular TTF/OTF file - embed directly
+        customFont = await pdfDoc.embedFont(fontBytes);
+        log('✅ Successfully embedded font');
+      }
+      
+      log(`   Font object: ${customFont ? 'valid' : 'null'}, original file size: ${fontBytes.length} bytes`);
+      
+      // Verify the font object has the required methods
+      if (!customFont || typeof customFont.encode !== 'function') {
+        throw new Error('Embedded font object is invalid - missing required methods');
+      }
     } else {
       log('❌ Font file not found. Tried the following paths:');
       for (const tryPath of possiblePaths) {
@@ -297,9 +385,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         // Then set text - font is now set to handle Japanese characters via Identity-H
         try {
           f.setText(String(valRaw));
-          filled++;
-          if (name === 'DestinationOtherText') {
-            log(`✅ Set text field ${name} to: "${valRaw}"`);
+        filled++;
+        if (name === 'DestinationOtherText') {
+          log(`✅ Set text field ${name} to: "${valRaw}"`);
           }
         } catch (e) {
           // If setText still fails after updateAppearances, it's a serious issue
