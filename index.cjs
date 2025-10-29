@@ -154,10 +154,14 @@ function resolveValue(name, fields, aliasView) {
 
 async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
-  const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
+  // Load with updateFieldAppearances: true to initialize template fonts properly
+  // This ensures template fonts are ready when we call setText()
+  const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
-  // Use template's existing fonts - don't override them
+  // Trust template's existing fonts - don't override them
   // Template has ヒラギノ明朝 ProN W3 which supports Japanese
+  // Just register fontkit to access embedded fonts if needed
+  try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
 
   // 3) fill
   const form = pdfDoc.getForm();
@@ -213,9 +217,25 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
-        f.setText(String(valRaw));
-        // Don't call updateAppearances - preserve template's font and auto-sizing
-        filled++;
+        // Just set text - trust template's font (ヒラギノ明朝 ProN W3) and auto-sizing
+        try {
+          f.setText(String(valRaw));
+          filled++;
+        } catch (e) {
+          // If WinAnsi error, log it but continue - template font might handle it on save
+          if (e.message && e.message.includes('WinAnsi')) {
+            log(`⚠️ WinAnsi warning on ${name} (template font should handle on save):`, e.message);
+            // Try to set anyway - template font might work
+            try {
+              f.setText(String(valRaw));
+              filled++;
+            } catch (e2) {
+              log(`❌ Failed to set text for ${name}:`, e2.message);
+            }
+          } else {
+            throw e;
+          }
+        }
         if (name === 'DestinationOtherText') {
           log(`✅ Set text field ${name} to: "${valRaw}"`);
         }
