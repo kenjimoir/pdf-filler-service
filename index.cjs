@@ -171,16 +171,26 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (fs.existsSync(fontPath)) {
       log('Loading Japanese font from:', fontPath);
       const fontBytes = fs.readFileSync(fontPath);
+      
+      // For TTC (TrueType Collection), fontkit can handle it but we need to be explicit
+      // pdf-lib's embedFont should handle TTC automatically if fontkit is registered
       customFont = await pdfDoc.embedFont(fontBytes);
       log('✅ Successfully embedded Hiragino Mincho ProN font');
+      log(`   Font type: ${customFont ? 'loaded' : 'null'}, size: ${fontBytes.length} bytes`);
     } else {
-      log('⚠️ Font file not found at:', fontPath);
+      log('❌ Font file not found at:', fontPath);
       log('   FONT_TTF_PATH env var:', process.env.FONT_TTF_PATH || '(not set)');
+      log('   __dirname:', __dirname);
+      log('   Current working directory:', process.cwd());
       log('   Make sure the font file is in the correct location');
+      throw new Error(`Font file not found: ${fontPath}`);
     }
   } catch (e) {
-    log('⚠️ Font embedding failed:', e.message);
-    // Continue without custom font - will rely on template fonts
+    log('❌ Font embedding failed:', e.message);
+    log('   Stack:', e.stack);
+    // Don't continue - WinAnsi errors will occur without the font
+    // Throw the error so we know the font is required
+    throw new Error(`Font embedding required for Japanese text: ${e.message}`);
   }
 
   // 3) fill
@@ -237,16 +247,22 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
-        // Set font first (if available) to prevent WinAnsi encoding errors
-        if (customFont) {
-          try { 
-            f.updateAppearances(customFont);
-            log(`Set font for text field ${name}`);
-          } catch (e) {
-            log(`⚠️ Failed to update appearance for ${name}:`, e.message);
-          }
+        // CRITICAL: customFont must be set for Japanese characters
+        if (!customFont) {
+          log(`❌ CRITICAL: No custom font available for text field ${name}`);
+          throw new Error(`Custom font required but not loaded. Cannot set Japanese text for field: ${name}`);
         }
-        // Then set text - font should now be set to handle Japanese characters
+        
+        // Set font FIRST - this sets the field's default appearance to use Identity-H encoding
+        try { 
+          f.updateAppearances(customFont);
+          log(`✅ Set font for text field ${name}`);
+        } catch (e) {
+          log(`❌ CRITICAL: Failed to update appearance for ${name}:`, e.message);
+          throw new Error(`Failed to set font for field ${name}: ${e.message}`);
+        }
+        
+        // Then set text - font is now set to handle Japanese characters via Identity-H
         try {
           f.setText(String(valRaw));
           filled++;
@@ -254,21 +270,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             log(`✅ Set text field ${name} to: "${valRaw}"`);
           }
         } catch (e) {
-          // If setText fails (WinAnsi error), try updating appearance again then retry
+          // If setText still fails after updateAppearances, it's a serious issue
           if (e.message && e.message.includes('WinAnsi')) {
-            log(`⚠️ WinAnsi error on ${name}, retrying with font update`);
-            if (customFont) {
-              try { 
-                f.updateAppearances(customFont); 
-                f.setText(String(valRaw));
-                filled++;
-                log(`✅ Retry successful for ${name}`);
-              } catch (e2) {
-                log(`❌ Failed to set text for ${name} after retry:`, e2.message);
-              }
-            } else {
-              log(`❌ No custom font available for ${name}:`, e.message);
-            }
+            log(`❌ CRITICAL: WinAnsi error on ${name} even after font update`);
+            log(`   This suggests updateAppearances() didn't work correctly`);
+            log(`   Field: ${name}, Value: "${valRaw}", Font: ${customFont ? 'loaded' : 'null'}`);
+            throw new Error(`WinAnsi encoding error on field ${name}: ${e.message}. Font may not be properly applied.`);
           } else {
             throw e;
           }
