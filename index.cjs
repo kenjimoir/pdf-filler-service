@@ -209,8 +209,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const valueBy = buildAliasView(fields);
   let filled = 0;
 
-  // TEMPORARY: Disable export value checking to prevent crashes
-  const USE_EXPORT_VALUE_CHECKING = false;
+  // Re-enable export value checking with robust error handling
+  const USE_EXPORT_VALUE_CHECKING = true;
 
   // Debug: Log all field names and export values to help identify the correct field names
   log('===== ALL PDF FIELD NAMES AND EXPORT VALUES =====');
@@ -246,18 +246,62 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       if (name === 'CoverageValue') {
         if (USE_EXPORT_VALUE_CHECKING) {
         try {
-          // Get the export value of this specific checkbox - use safer method
+          // Get the export value of this specific checkbox - improved method
           let exportValue = '';
           try {
-            // Try different methods to get export value
+            // Method 1: Try getExportValues() function
             if (f.getExportValues && typeof f.getExportValues === 'function') {
               const exports = f.getExportValues();
               exportValue = exports && exports.length > 0 ? exports[0] : '';
-            } else if (f.exportValues && f.exportValues.length > 0) {
-              exportValue = f.exportValues[0];
-            } else if (f.options && f.options.length > 0) {
-              exportValue = f.options[0];
+              log(`Method 1 (getExportValues): ${exportValue}`);
             }
+            
+            // Method 2: Try exportValues property
+            if (!exportValue && f.exportValues && f.exportValues.length > 0) {
+              exportValue = f.exportValues[0];
+              log(`Method 2 (exportValues): ${exportValue}`);
+            }
+            
+            // Method 3: Try options property
+            if (!exportValue && f.options && f.options.length > 0) {
+              exportValue = f.options[0];
+              log(`Method 3 (options): ${exportValue}`);
+            }
+            
+            // Method 4: Try to get from widget properties
+            if (!exportValue) {
+              try {
+                const widgets = f.acroField && f.acroField.getWidgets ? f.acroField.getWidgets() : [];
+                if (widgets.length > 0) {
+                  const widget = widgets[0];
+                  if (widget && widget.getOnValue) {
+                    const onValue = widget.getOnValue();
+                    if (onValue && onValue.asString) {
+                      exportValue = onValue.asString();
+                      log(`Method 4 (widget OnValue): ${exportValue}`);
+                    }
+                  }
+                }
+              } catch (widgetError) {
+                log(`Method 4 failed: ${widgetError.message}`);
+              }
+            }
+            
+            // Method 5: Try to get from field properties
+            if (!exportValue) {
+              try {
+                if (f.acroField && f.acroField.getOnValue) {
+                  const onValue = f.acroField.getOnValue();
+                  if (onValue && onValue.asString) {
+                    exportValue = onValue.asString();
+                    log(`Method 5 (acroField OnValue): ${exportValue}`);
+                  }
+                }
+              } catch (acroError) {
+                log(`Method 5 failed: ${acroError.message}`);
+              }
+            }
+            
           } catch (exportError) {
             log(`Warning: Could not get export value for ${name}: ${exportError.message}`);
             exportValue = '';
@@ -460,18 +504,62 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             // Handle gender checkboxes with same field name but different export values
             if (USE_EXPORT_VALUE_CHECKING) {
             try {
-              // Get the export value of this specific checkbox - use safer method
+              // Get the export value of this specific checkbox - improved method
               let exportValue = '';
               try {
-                // Try different methods to get export value
+                // Method 1: Try getExportValues() function
                 if (f.getExportValues && typeof f.getExportValues === 'function') {
                   const exports = f.getExportValues();
                   exportValue = exports && exports.length > 0 ? exports[0] : '';
-                } else if (f.exportValues && f.exportValues.length > 0) {
-                  exportValue = f.exportValues[0];
-                } else if (f.options && f.options.length > 0) {
-                  exportValue = f.options[0];
+                  log(`Gender Method 1 (getExportValues): ${exportValue}`);
                 }
+                
+                // Method 2: Try exportValues property
+                if (!exportValue && f.exportValues && f.exportValues.length > 0) {
+                  exportValue = f.exportValues[0];
+                  log(`Gender Method 2 (exportValues): ${exportValue}`);
+                }
+                
+                // Method 3: Try options property
+                if (!exportValue && f.options && f.options.length > 0) {
+                  exportValue = f.options[0];
+                  log(`Gender Method 3 (options): ${exportValue}`);
+                }
+                
+                // Method 4: Try to get from widget properties
+                if (!exportValue) {
+                  try {
+                    const widgets = f.acroField && f.acroField.getWidgets ? f.acroField.getWidgets() : [];
+                    if (widgets.length > 0) {
+                      const widget = widgets[0];
+                      if (widget && widget.getOnValue) {
+                        const onValue = widget.getOnValue();
+                        if (onValue && onValue.asString) {
+                          exportValue = onValue.asString();
+                          log(`Gender Method 4 (widget OnValue): ${exportValue}`);
+                        }
+                      }
+                    }
+                  } catch (widgetError) {
+                    log(`Gender Method 4 failed: ${widgetError.message}`);
+                  }
+                }
+                
+                // Method 5: Try to get from field properties
+                if (!exportValue) {
+                  try {
+                    if (f.acroField && f.acroField.getOnValue) {
+                      const onValue = f.acroField.getOnValue();
+                      if (onValue && onValue.asString) {
+                        exportValue = onValue.asString();
+                        log(`Gender Method 5 (acroField OnValue): ${exportValue}`);
+                      }
+                    }
+                  } catch (acroError) {
+                    log(`Gender Method 5 failed: ${acroError.message}`);
+                  }
+                }
+                
               } catch (exportError) {
                 log(`Warning: Could not get export value for ${n}: ${exportError.message}`);
                 exportValue = '';
@@ -677,27 +765,40 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 6) save - Optimized for consistent rendering across all devices
+  // 6) save - Enhanced for consistent rendering across all devices
   let outBytes;
   try {
-    // Use optimized save options for consistent rendering
-    log('Saving PDF with optimized settings for consistency...');
+    // Enhanced save options for maximum consistency
+    log('Saving PDF with enhanced settings for cross-device consistency...');
     outBytes = await pdfDoc.save({
       useObjectStreams: false,
       addDefaultPage: false,
-      updateFieldAppearances: true, // Enable to ensure consistent rendering
+      updateFieldAppearances: true, // Force field appearance recalculation
       objectsPerTick: 50,
+      // Additional options for consistency
+      compress: true,
     });
-    log('PDF saved successfully with consistent rendering settings');
+    log('PDF saved successfully with enhanced consistency settings');
   } catch (e) {
-    log('Optimized save failed, trying fallback:', e.message);
+    log('Enhanced save failed, trying standard options:', e.message);
     try {
-      // Fallback: Use default save options
-      outBytes = await pdfDoc.save();
-      log('PDF saved with fallback options');
+      // Standard save options
+      outBytes = await pdfDoc.save({
+        useObjectStreams: false,
+        addDefaultPage: false,
+        updateFieldAppearances: true,
+      });
+      log('PDF saved with standard options');
     } catch (e2) {
-      log('All save attempts failed:', e2.message);
-      throw e2;
+      log('Standard save failed, trying minimal options:', e2.message);
+      try {
+        // Minimal save options as last resort
+        outBytes = await pdfDoc.save();
+        log('PDF saved with minimal options');
+      } catch (e3) {
+        log('All save attempts failed:', e3.message);
+        throw e3;
+      }
     }
   }
 
@@ -729,11 +830,24 @@ app.get('/health', (_req, res) => {
 
 app.post('/fill', async (req, res) => {
   try {
+    log('===== PDF FILLER SERVICE REQUEST RECEIVED =====');
+    log('Request body keys:', Object.keys(req.body || {}));
+    
     const { templateFileId, fields, outputName, folderId, mode, watermarkText } = req.body || {};
-    if (!templateFileId) return res.status(400).json({ error: 'templateFileId is required' });
+    if (!templateFileId) {
+      log('ERROR: templateFileId is required');
+      return res.status(400).json({ error: 'templateFileId is required' });
+    }
+
+    log('Starting PDF fill process...');
+    log('Template file ID:', templateFileId);
+    log('Output name:', outputName);
+    log('Folder ID:', folderId);
 
     const tmpTemplate = path.join(TMP, `template_${templateFileId}.pdf`);
+    log('Downloading template file...');
     await downloadDriveFile(templateFileId, tmpTemplate);
+    log('Template file downloaded successfully');
 
     log('===== FULL FIELD MAP RECEIVED FROM GAS =====');
     if (fields && typeof fields === 'object') {
@@ -756,13 +870,22 @@ app.post('/fill', async (req, res) => {
     log('INCOMING (probe):', JSON.stringify(probe));
 
     const wm = watermarkText || (mode === 'review' ? '確認用 / DRAFT' : '');
+    log('Starting PDF fill process with watermark:', wm);
     const result = await fillPdf(tmpTemplate, outPath, fields || {}, { watermarkText: wm });
+    log(`PDF fill process completed successfully`);
     log(`Filled PDF -> ${result.outPath} (${result.size} bytes, fields filled: ${result.filled})`);
 
+    log('Starting upload to Google Drive...');
     const uploaded = await uploadToDrive(result.outPath, outName, folderId);
+    log('Upload to Google Drive completed successfully');
     log('Uploaded to Drive:', uploaded);
 
-    res.json({ ok: true, filledCount: result.filled, driveFile: uploaded, webViewLink: uploaded.webViewLink });
+    log('===== PDF FILLER SERVICE RESPONSE =====');
+    const response = { ok: true, filledCount: result.filled, driveFile: uploaded, webViewLink: uploaded.webViewLink };
+    log('Response:', JSON.stringify(response));
+    log('===== END RESPONSE =====');
+
+    res.json(response);
   } catch (err) {
     log('ERROR /fill:', err && (err.stack || err));
     res.status(500).json({ error: 'Fill failed', detail: err.message });
