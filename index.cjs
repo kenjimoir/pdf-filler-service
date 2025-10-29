@@ -565,83 +565,86 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // Process checkbox groups
+  // Process checkbox groups - NEW APPROACH: Use explicit field names
   log('===== PROCESSING CHECKBOX GROUPS =====');
   for (const [groupName, checkboxes] of Object.entries(checkboxGroups)) {
     log(`Processing checkbox group: ${groupName} (${checkboxes.length} checkboxes)`);
     
-    if (groupName === 'CoverageValue') {
-      const targetValue = fields.CoverageValue;
-      log(`CoverageValue group: looking for value "${targetValue}"`);
-      
+    // Handle explicit checkbox field names (new approach)
+    if (groupName === 'CoverageValue_日') {
+      const shouldCheck = fields.CoverageValue_日 === 'on';
+      log(`CoverageValue_日: shouldCheck=${shouldCheck}`);
       for (const checkbox of checkboxes) {
-        try {
-          // Try to get export value
-          let exportValue = '';
-          try {
-            if (checkbox.getExportValues && typeof checkbox.getExportValues === 'function') {
-              const exports = checkbox.getExportValues();
-              exportValue = exports && exports.length > 0 ? exports[0] : '';
-            }
-          } catch (e) {
-            log(`Could not get export value for ${groupName}: ${e.message}`);
+        if (shouldCheck) {
+          checkbox.check();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
           }
-          
-          log(`CoverageValue checkbox: exportValue="${exportValue}", targetValue="${targetValue}"`);
-          
-          if (exportValue === targetValue) {
-            checkbox.check();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { checkbox.updateAppearances(customFont); } catch (_) {}
-            }
-            filled++;
-            log(`✅ Checked CoverageValue checkbox (exportValue: ${exportValue})`);
-          } else {
-            checkbox.uncheck();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { checkbox.updateAppearances(customFont); } catch (_) {}
-            }
-            log(`❌ Unchecked CoverageValue checkbox (exportValue: ${exportValue})`);
+          filled++;
+          log(`✅ Checked CoverageValue_日 checkbox`);
+        } else {
+          checkbox.uncheck();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
           }
-        } catch (e) {
-          log(`Error processing CoverageValue checkbox: ${e.message}`);
+          log(`❌ Unchecked CoverageValue_日 checkbox`);
         }
       }
-    } else if (groupName === 'TravelerSex') {
-      const targetValue = fields.TravelerSex;
-      log(`TravelerSex group: looking for value "${targetValue}"`);
-      
+    } else if (groupName === 'CoverageValue_月') {
+      const shouldCheck = fields.CoverageValue_月 === 'on';
+      log(`CoverageValue_月: shouldCheck=${shouldCheck}`);
       for (const checkbox of checkboxes) {
-        try {
-          // Try to get export value
-          let exportValue = '';
-          try {
-            if (checkbox.getExportValues && typeof checkbox.getExportValues === 'function') {
-              const exports = checkbox.getExportValues();
-              exportValue = exports && exports.length > 0 ? exports[0] : '';
-            }
-          } catch (e) {
-            log(`Could not get export value for ${groupName}: ${e.message}`);
+        if (shouldCheck) {
+          checkbox.check();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
           }
-          
-          log(`TravelerSex checkbox: exportValue="${exportValue}", targetValue="${targetValue}"`);
-          
-          if (exportValue === targetValue) {
-            checkbox.check();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { checkbox.updateAppearances(customFont); } catch (_) {}
-            }
-            filled++;
-            log(`✅ Checked TravelerSex checkbox (exportValue: ${exportValue})`);
-          } else {
-            checkbox.uncheck();
-            if (!RESPECT_TEMPLATE_APPEARANCE) {
-              try { checkbox.updateAppearances(customFont); } catch (_) {}
-            }
-            log(`❌ Unchecked TravelerSex checkbox (exportValue: ${exportValue})`);
+          filled++;
+          log(`✅ Checked CoverageValue_月 checkbox`);
+        } else {
+          checkbox.uncheck();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
           }
-        } catch (e) {
-          log(`Error processing TravelerSex checkbox: ${e.message}`);
+          log(`❌ Unchecked CoverageValue_月 checkbox`);
+        }
+      }
+    } else if (groupName === 'TravelerSex_男性') {
+      const shouldCheck = fields.TravelerSex_男性 === 'on';
+      log(`TravelerSex_男性: shouldCheck=${shouldCheck}`);
+      for (const checkbox of checkboxes) {
+        if (shouldCheck) {
+          checkbox.check();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          filled++;
+          log(`✅ Checked TravelerSex_男性 checkbox`);
+        } else {
+          checkbox.uncheck();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          log(`❌ Unchecked TravelerSex_男性 checkbox`);
+        }
+      }
+    } else if (groupName === 'TravelerSex_女性') {
+      const shouldCheck = fields.TravelerSex_女性 === 'on';
+      log(`TravelerSex_女性: shouldCheck=${shouldCheck}`);
+      for (const checkbox of checkboxes) {
+        if (shouldCheck) {
+          checkbox.check();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          filled++;
+          log(`✅ Checked TravelerSex_女性 checkbox`);
+        } else {
+          checkbox.uncheck();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          log(`❌ Unchecked TravelerSex_女性 checkbox`);
         }
       }
     }
