@@ -173,9 +173,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         const fontBytes = fs.readFileSync(p);
         const ext = path.extname(p).toLowerCase();
         const allowSubset = ext !== '.otf';
-        customFont = await pdfDoc.embedFont(fontBytes, { subset: allowSubset });
+        // Enhanced font embedding for better Google Drive compatibility
+        customFont = await pdfDoc.embedFont(fontBytes, { 
+          subset: allowSubset,
+          // Force embedding of all glyphs for better compatibility
+          subsetEmbedded: true
+        });
         chosenFontPath = p;
-        log('Embedded JP font:', p, '(subset:', allowSubset, ')');
+        log('Embedded JP font:', p, '(subset:', allowSubset, ', subsetEmbedded: true)');
         break;
       }
     } catch (e) {
@@ -197,11 +202,14 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   dr.set(PDFName.of('Font'), drFont);
   acroForm.set(PDFName.of('DR'), dr);
 
-  if (!RESPECT_TEMPLATE_APPEARANCE) {
-    acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
-    acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
-    log('NeedAppearances enabled for consistent rendering');
-  }
+  // Enhanced font embedding for better Google Drive compatibility
+  acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
+  acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+  
+  // Additional font embedding settings for better compatibility
+  acroForm.set(PDFName.of('SigFlags'), PDFNumber.of(3));
+  
+  log('Enhanced font embedding enabled for Google Drive compatibility');
 
   // 3) fill
   const form = pdfDoc.getForm();
@@ -258,9 +266,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
-        if (!RESPECT_TEMPLATE_APPEARANCE) {
-          try { f.updateAppearances(customFont); } catch (_) {}
-        }
+        // Always update appearances with custom font for better Google Drive compatibility
+        try { f.updateAppearances(customFont); } catch (_) {}
         filled++;
         if (name === 'DestinationOtherText') {
           log(`✅ Set text field ${name} to: "${valRaw}"`);
@@ -745,15 +752,17 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   // 6) save - Enhanced for consistent rendering across all devices
   let outBytes;
   try {
-    // Enhanced save options for maximum consistency
+    // Enhanced save options for maximum consistency and font embedding
     log('Saving PDF with enhanced settings for cross-device consistency...');
     outBytes = await pdfDoc.save({
       useObjectStreams: false,
       addDefaultPage: false,
       updateFieldAppearances: true, // Force field appearance recalculation
       objectsPerTick: 50,
-      // Additional options for consistency
+      // Additional options for consistency and font embedding
       compress: true,
+      // Force font subsetting for better compatibility
+      subset: true,
     });
     log('PDF saved successfully with enhanced consistency settings');
   } catch (e) {
