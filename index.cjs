@@ -344,16 +344,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             
             if (shouldCheck) {
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               filled++;
               log(`✅ Checked checkbox ${n} (era field with value ${numericValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               log(`❌ Unchecked checkbox ${n} (not era field or wrong value)`);
             }
           } catch (e) {
@@ -398,16 +394,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             if (shouldCheck) {
               // Simple checkbox logic for explicit field names
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               filled++;
               log(`✅ Checked PhoneType ${n} (value: ${phoneTypeValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               log(`❌ Unchecked PhoneType checkbox ${n} (no match for value: ${phoneTypeValue})`);
             }
           } else if (isTravelerSexField) {
@@ -482,17 +474,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               // Check if this checkbox's export value matches the input value
               if (exportValue === travelerSexValue) {
                 f.check();
-                if (!RESPECT_TEMPLATE_APPEARANCE) {
-                  try { f.updateAppearances(customFont); } catch (_) {}
-                }
+                // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
                 filled++;
                 log(`✅ Checked TravelerSex checkbox (exportValue: ${exportValue} matches input: ${travelerSexValue})`);
                 continue;
               } else {
                 f.uncheck();
-                if (!RESPECT_TEMPLATE_APPEARANCE) {
-                  try { f.updateAppearances(customFont); } catch (_) {}
-                }
+                // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
                 log(`❌ Unchecked TravelerSex checkbox (exportValue: ${exportValue} does not match input: ${travelerSexValue})`);
                 continue;
               }
@@ -524,16 +512,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             if (shouldCheck) {
               // Simple checkbox logic for explicit field names
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               filled++;
               log(`✅ Checked TravelerSex ${n} (value: ${travelerSexValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               log(`❌ Unchecked TravelerSex checkbox ${n} (no match for value: ${travelerSexValue})`);
             }
           } else if (isSameAsTravelerField) {
@@ -561,16 +545,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             if (shouldCheck) {
               // Simple checkbox logic for SameAsTraveler
               f.check();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               filled++;
               log(`✅ Checked SameAsTraveler ${n} (value: ${sameAsTravelerValue})`);
             } else {
               f.uncheck();
-              if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                try { f.updateAppearances(customFont); } catch (_) {}
-              }
+              // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
               log(`❌ Unchecked SameAsTraveler checkbox ${n} (no match for value: ${sameAsTravelerValue})`);
             }
           } else {
@@ -633,16 +613,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       for (const checkbox of checkboxes) {
         if (shouldCheck) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked CoverageValue_日 checkbox`);
         } else {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           log(`❌ Unchecked CoverageValue_日 checkbox`);
         }
       }
@@ -652,16 +628,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       for (const checkbox of checkboxes) {
         if (shouldCheck) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked CoverageValue_月 checkbox`);
         } else {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           log(`❌ Unchecked CoverageValue_月 checkbox`);
         }
       }
@@ -671,16 +643,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       for (const checkbox of checkboxes) {
         if (shouldCheck) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked TravelerSex_男性 checkbox`);
         } else {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           log(`❌ Unchecked TravelerSex_男性 checkbox`);
         }
       }
@@ -690,16 +658,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       for (const checkbox of checkboxes) {
         if (shouldCheck) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked TravelerSex_女性 checkbox`);
         } else {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           log(`❌ Unchecked TravelerSex_女性 checkbox`);
         }
       }
@@ -712,16 +676,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       for (const checkbox of checkboxes) {
         if (shouldCheck) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked ${groupName} checkbox`);
         } else {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           log(`❌ Unchecked ${groupName} checkbox`);
         }
       }
@@ -734,16 +694,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       for (const checkbox of checkboxes) {
         if (shouldCheck) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked ${groupName} checkbox`);
         } else {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           log(`❌ Unchecked ${groupName} checkbox`);
         }
       }
@@ -757,9 +713,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         log(`Q5_DestinationRegion: Found region="${regionValue}", checking ${regionCheckboxName}`);
         for (const checkbox of checkboxGroups[regionCheckboxName]) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked ${regionCheckboxName} checkbox`);
         }
@@ -768,9 +722,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         // Uncheck all DestinationRegion checkboxes
         for (const checkbox of checkboxes) {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
         }
         log(`❌ Unchecked Q5_DestinationRegion checkbox (region not found)`);
       }
@@ -783,16 +735,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       for (const checkbox of checkboxes) {
         if (shouldCheck) {
           checkbox.check();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           filled++;
           log(`✅ Checked ${groupName} checkbox`);
         } else {
           checkbox.uncheck();
-          if (!RESPECT_TEMPLATE_APPEARANCE) {
-            try { checkbox.updateAppearances(customFont); } catch (_) {}
-          }
+          // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
           log(`❌ Unchecked ${groupName} checkbox`);
         }
       }
