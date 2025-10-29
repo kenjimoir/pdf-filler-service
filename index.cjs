@@ -236,10 +236,13 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         log(`   Font file size: ${fontBytes.length} bytes`);
       }
       
-      // Verify the font object has the required methods (for both TTC fallback and regular fonts)
-      if (!customFont || typeof customFont.encode !== 'function') {
-        throw new Error(`Embedded font object is invalid - missing encode() method. This usually means the font file format is not supported. Use OTF or TTF format instead.`);
+      // Font object is valid if embedFont() succeeded without throwing an error
+      // pdf-lib font objects don't have encode() - they're used directly with updateAppearances()
+      if (!customFont) {
+        throw new Error(`Failed to embed font - embedFont() returned null/undefined. This usually means the font file format is not supported.`);
       }
+      
+      log(`   Font object created successfully (methods available for updateAppearances)`);
     } else {
       log('❌ Font file not found. Tried the following paths:');
       for (const tryPath of possiblePaths) {
