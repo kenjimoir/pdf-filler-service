@@ -25,21 +25,58 @@ function normalizeYesNo(value) {
   return 'no';
 }
 
+// Create multipart body for Google Drive upload
+function createMultipartBody(fileBytes, fileName, folderId) {
+  const boundary = '----WebKitFormBoundary' + Math.random().toString(16).substr(2);
+  const metadata = {
+    name: fileName,
+    parents: folderId ? [folderId] : undefined,
+  };
+  
+  const body = [
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="metadata"',
+    'Content-Type: application/json',
+    '',
+    JSON.stringify(metadata),
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="file"',
+    'Content-Type: application/pdf',
+    '',
+    fileBytes,
+    `--${boundary}--`,
+  ].join('\r\n');
+  
+  return {
+    body: Buffer.from(body),
+    headers: {
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+  };
+}
+
 app.post('/fill', async (req, res) => {
   try {
     log('Received PDF fill request');
     
-    const { templateUrl, fields } = req.body;
-    if (!templateUrl || !fields) {
-      return res.status(400).json({ error: 'Missing templateUrl or fields' });
+    const { templateFileId, fields, outputName, folderId, mode, accessToken } = req.body;
+    if (!templateFileId || !fields) {
+      return res.status(400).json({ error: 'Missing templateFileId or fields' });
     }
 
     log('Fields received:', Object.keys(fields).length);
-    log('Sample fields:', Object.entries(fields).slice(0, 5));
+    log('Template file ID:', templateFileId);
+    log('Output name:', outputName);
+    log('Folder ID:', folderId);
 
-    // Download template
-    log('Downloading template from:', templateUrl);
-    const templateResponse = await fetch(templateUrl);
+    // Download template from Google Drive
+    log('Downloading template from Google Drive...');
+    const templateResponse = await fetch(`https://www.googleapis.com/drive/v3/files/${templateFileId}?alt=media`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+    
     if (!templateResponse.ok) {
       throw new Error(`Failed to download template: ${templateResponse.status}`);
     }
@@ -114,13 +151,15 @@ app.post('/fill', async (req, res) => {
     log('PDF saved, size:', pdfBytes.length);
 
     // Upload to Google Drive
-    const uploadResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=media', {
+    log('Starting upload to Google Drive...');
+    const multipartData = createMultipartBody(pdfBytes, outputName || 'filled.pdf', folderId);
+    const uploadResponse = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${req.body.accessToken}`,
-        'Content-Type': 'application/pdf',
+        'Authorization': `Bearer ${accessToken}`,
+        ...multipartData.headers,
       },
-      body: pdfBytes,
+      body: multipartData.body,
     });
 
     if (!uploadResponse.ok) {
