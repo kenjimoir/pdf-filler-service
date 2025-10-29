@@ -1,4 +1,5 @@
 const express = require('express');
+const cors = require('cors');
 const { PDFDocument, PDFName, PDFString, PDFBool } = require('pdf-lib');
 const { google } = require('googleapis');
 const fs = require('fs');
@@ -28,6 +29,7 @@ function getDriveClient() {
   return google.drive({ version: 'v3', auth });
 }
 
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // Simple field value resolver
@@ -141,7 +143,6 @@ app.post('/fill', async (req, res) => {
 
     // Upload to Google Drive
     log('Starting upload to Google Drive...');
-    const drive = getDriveClient();
     const fileMetadata = {
       name: outputName || 'filled.pdf',
       parents: folderId ? [folderId] : undefined,
