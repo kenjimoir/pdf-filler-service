@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { PDFDocument, rgb, degrees, PDFName, PDFBool, PDFDict, PDFString } = require('pdf-lib');
+const { PDFDocument, rgb, degrees, PDFName, PDFBool, PDFDict, PDFString, PDFNumber } = require('pdf-lib');
 const { google } = require('googleapis');
 const fontkit = require('@pdf-lib/fontkit');
 
