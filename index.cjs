@@ -155,13 +155,33 @@ function resolveValue(name, fields, aliasView) {
 async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   // Load with updateFieldAppearances: true to initialize template fonts properly
-  // This ensures template fonts are ready when we call setText()
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: true });
 
-  // Trust template's existing fonts - don't override them
-  // Template has ヒラギノ明朝 ProN W3 which supports Japanese
-  // Just register fontkit to access embedded fonts if needed
-  try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
+  // Register fontkit and embed Japanese font from file
+  let customFont = null;
+  try {
+    pdfDoc.registerFontkit(fontkit);
+    
+    // Use FONT_TTF_PATH environment variable if set, otherwise default to filename in current dir
+    const fontFileName = process.env.FONT_TTF_PATH || 'HiraginoMinchoProN.ttc';
+    const fontPath = path.isAbsolute(fontFileName) 
+      ? fontFileName 
+      : path.join(__dirname, fontFileName);
+    
+    if (fs.existsSync(fontPath)) {
+      log('Loading Japanese font from:', fontPath);
+      const fontBytes = fs.readFileSync(fontPath);
+      customFont = await pdfDoc.embedFont(fontBytes);
+      log('✅ Successfully embedded Hiragino Mincho ProN font');
+    } else {
+      log('⚠️ Font file not found at:', fontPath);
+      log('   FONT_TTF_PATH env var:', process.env.FONT_TTF_PATH || '(not set)');
+      log('   Make sure the font file is in the correct location');
+    }
+  } catch (e) {
+    log('⚠️ Font embedding failed:', e.message);
+    // Continue without custom font - will rely on template fonts
+  }
 
   // 3) fill
   const form = pdfDoc.getForm();
@@ -217,27 +237,41 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
-        // Just set text - trust template's font (ヒラギノ明朝 ProN W3) and auto-sizing
+        // Set font first (if available) to prevent WinAnsi encoding errors
+        if (customFont) {
+          try { 
+            f.updateAppearances(customFont);
+            log(`Set font for text field ${name}`);
+          } catch (e) {
+            log(`⚠️ Failed to update appearance for ${name}:`, e.message);
+          }
+        }
+        // Then set text - font should now be set to handle Japanese characters
         try {
           f.setText(String(valRaw));
           filled++;
+          if (name === 'DestinationOtherText') {
+            log(`✅ Set text field ${name} to: "${valRaw}"`);
+          }
         } catch (e) {
-          // If WinAnsi error, log it but continue - template font might handle it on save
+          // If setText fails (WinAnsi error), try updating appearance again then retry
           if (e.message && e.message.includes('WinAnsi')) {
-            log(`⚠️ WinAnsi warning on ${name} (template font should handle on save):`, e.message);
-            // Try to set anyway - template font might work
-            try {
-              f.setText(String(valRaw));
-              filled++;
-            } catch (e2) {
-              log(`❌ Failed to set text for ${name}:`, e2.message);
+            log(`⚠️ WinAnsi error on ${name}, retrying with font update`);
+            if (customFont) {
+              try { 
+                f.updateAppearances(customFont); 
+                f.setText(String(valRaw));
+                filled++;
+                log(`✅ Retry successful for ${name}`);
+              } catch (e2) {
+                log(`❌ Failed to set text for ${name} after retry:`, e2.message);
+              }
+            } else {
+              log(`❌ No custom font available for ${name}:`, e.message);
             }
           } else {
             throw e;
           }
-        }
-        if (name === 'DestinationOtherText') {
-          log(`✅ Set text field ${name} to: "${valRaw}"`);
         }
       } else {
         if (name === 'DestinationOtherText') {
