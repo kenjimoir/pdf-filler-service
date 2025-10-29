@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.env
+tmp/
+*.pdf
+!fonts/*.otf
+!fonts/*.ttf
