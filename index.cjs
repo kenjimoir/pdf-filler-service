@@ -695,10 +695,81 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           log(`❌ Unchecked TravelerSex_女性 checkbox`);
         }
       }
+    } else if (groupName.startsWith('Emergency') && (groupName.endsWith('Thousand') || groupName.includes('Thousand'))) {
+      // Handle Emergency Return checkboxes (TRUE/FALSE strings)
+      const fieldValue = String(fields[groupName] || '').toUpperCase();
+      const shouldCheck = fieldValue === 'TRUE' || fieldValue === 'YES' || fieldValue === 'ON' || fieldValue === '1';
+      log(`${groupName}: shouldCheck=${shouldCheck} (value="${fields[groupName]}")`);
+      
+      for (const checkbox of checkboxes) {
+        if (shouldCheck) {
+          checkbox.check();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          filled++;
+          log(`✅ Checked ${groupName} checkbox`);
+        } else {
+          checkbox.uncheck();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          log(`❌ Unchecked ${groupName} checkbox`);
+        }
+      }
+    } else if (groupName.includes('BirthEra') || groupName === 'ApplicantBirthEra19or20' || groupName === 'TravelerBirthEra19or20') {
+      // Handle Birth Era checkboxes (numeric values "19" or "20")
+      const fieldValue = String(fields[groupName] || '');
+      const shouldCheck = fieldValue === '19' || fieldValue === '20';
+      log(`${groupName}: shouldCheck=${shouldCheck} (value="${fieldValue}")`);
+      
+      for (const checkbox of checkboxes) {
+        if (shouldCheck) {
+          checkbox.check();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          filled++;
+          log(`✅ Checked ${groupName} checkbox`);
+        } else {
+          checkbox.uncheck();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          log(`❌ Unchecked ${groupName} checkbox`);
+        }
+      }
+    } else if (groupName === 'Q5_DestinationRegion') {
+      // Handle Destination Region - check the corresponding region checkbox
+      const regionValue = String(fields[groupName] || '');
+      const regionCheckboxName = `DestinationRegion_${regionValue}`;
+      
+      // We need to find and check the corresponding checkbox in the checkboxGroups
+      if (checkboxGroups[regionCheckboxName] && checkboxGroups[regionCheckboxName].length > 0) {
+        log(`Q5_DestinationRegion: Found region="${regionValue}", checking ${regionCheckboxName}`);
+        for (const checkbox of checkboxGroups[regionCheckboxName]) {
+          checkbox.check();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+          filled++;
+          log(`✅ Checked ${regionCheckboxName} checkbox`);
+        }
+      } else {
+        log(`Q5_DestinationRegion: Region checkbox ${regionCheckboxName} not found`);
+        // Uncheck all DestinationRegion checkboxes
+        for (const checkbox of checkboxes) {
+          checkbox.uncheck();
+          if (!RESPECT_TEMPLATE_APPEARANCE) {
+            try { checkbox.updateAppearances(customFont); } catch (_) {}
+          }
+        }
+        log(`❌ Unchecked Q5_DestinationRegion checkbox (region not found)`);
+      }
     } else {
       // Fallback for all other checkbox fields (like the 8 questions)
       const fieldValue = fields[groupName];
-      const shouldCheck = fieldValue === 'on' || fieldValue === 'はい' || fieldValue === 'yes' || fieldValue === 'true';
+      const shouldCheck = fieldValue === 'on' || fieldValue === 'はい' || fieldValue === 'yes' || fieldValue === 'true' || String(fieldValue).toUpperCase() === 'TRUE';
       log(`${groupName}: shouldCheck=${shouldCheck} (value="${fieldValue}")`);
       
       for (const checkbox of checkboxes) {
