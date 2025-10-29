@@ -206,9 +206,9 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   dr.set(PDFName.of('Font'), drFont);
   acroForm.set(PDFName.of('DR'), dr);
 
-    // Set default appearance with custom font
-    // Note: updateFieldAppearances: false on save preserves template auto-sizing
-    acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
+    // DON'T set global DA - it forces checkboxes to use text font instead of ZapfDingbats
+    // Text fields will still get the correct font via explicit updateAppearances(customFont) calls
+    // acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g')); // REMOVED - breaks checkboxes
     // NeedAppearances not set - let template's original value remain (avoid PDFBool API issues)
     
     log('Helvetica font embedding enabled');
