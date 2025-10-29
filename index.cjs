@@ -470,6 +470,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
         }
         if ((!ctor.includes('Text') && !ctor.includes('Dropdown')) || !raw) continue;
 
+        // Skip burn-in for problematic fields that have auto-sizing in template
+        if (name.includes('代理店') || name.includes('Agent') || name.includes('Code')) {
+          log(`Skipping burn-in for field "${name}" to preserve template auto-sizing`);
+          continue;
+        }
+
         const widgets = (f.acroField && f.acroField.getWidgets) ? f.acroField.getWidgets() : [];
         for (const w of widgets) {
           const page = w.getPage && w.getPage();
@@ -477,12 +483,35 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           const rect = w.getRectangle && w.getRectangle();
           if (!rect) continue;
           const text = String(raw);
-          const padding = 2;
-          let size = Math.min(12, rect.height - 2 * padding);
+          const padding = 1; // Reduced padding to give more space
+          let size = Math.min(10, rect.height - 2 * padding); // Start with smaller size
           const maxWidth = rect.width - 2 * padding;
-          while (size > 5.5 && customFont.widthOfTextAtSize(text, size) > maxWidth) size -= 0.5;
+          
+          // Better text fitting algorithm
+          let displayText = text;
+          let textWidth = customFont.widthOfTextAtSize(text, size);
+          
+          // If text is too wide, try reducing font size first
+          while (size > 6 && textWidth > maxWidth) {
+            size -= 0.5;
+            textWidth = customFont.widthOfTextAtSize(text, size);
+          }
+          
+          // If still too wide, truncate text with ellipsis
+          if (textWidth > maxWidth && text.length > 3) {
+            let truncatedText = text;
+            while (truncatedText.length > 3 && customFont.widthOfTextAtSize(truncatedText + '...', size) > maxWidth) {
+              truncatedText = truncatedText.slice(0, -1);
+            }
+            displayText = truncatedText + '...';
+          }
 
-          page.drawText(text, {
+          // Debug logging for problematic fields
+          if (name.includes('代理店') || name.includes('Agent') || name.includes('Code')) {
+            log(`Burn-in field "${name}": original="${text}", display="${displayText}", size=${size}, rect=${rect.width}x${rect.height}`);
+          }
+
+          page.drawText(displayText, {
             x: rect.x + padding,
             y: rect.y + (rect.height - size) / 2,
             size,
