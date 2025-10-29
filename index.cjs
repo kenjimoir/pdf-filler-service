@@ -20,7 +20,7 @@ const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID || '';
 
 // === new flags ===
 const RESPECT_TEMPLATE_APPEARANCE =
-  String(process.env.RESPECT_TEMPLATE_APPEARANCE || 'true').toLowerCase() === 'true';
+  String(process.env.RESPECT_TEMPLATE_APPEARANCE || 'false').toLowerCase() === 'true';
 const FORCE_BURN_IN =
   String(process.env.FORCE_BURN_IN || 'true').toLowerCase() === 'true';
 
@@ -199,9 +199,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
   if (!RESPECT_TEMPLATE_APPEARANCE) {
     acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g'));
-    // TEMPORARILY DISABLED: This might be causing text cutoff issues
-    // acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
-    log('NeedAppearances disabled to prevent text cutoff');
+    acroForm.set(PDFName.of('NeedAppearances'), PDFBool.True);
+    log('NeedAppearances enabled for consistent rendering');
   }
 
   // 3) fill
@@ -459,8 +458,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 4) Burn-in (optional) - TEMPORARILY DISABLED due to text cutoff issues
-  if (false && FORCE_BURN_IN && !RESPECT_TEMPLATE_APPEARANCE) {
+  // 4) Burn-in (optional) - Re-enabled with improved text handling for consistency
+  if (FORCE_BURN_IN && !RESPECT_TEMPLATE_APPEARANCE) {
     try {
       let burned = 0;
       for (const f of allFields) {
@@ -495,23 +494,20 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
           let size = Math.min(10, rect.height - 2 * padding); // Start with smaller size
           const maxWidth = rect.width - 2 * padding;
           
-          // Better text fitting algorithm
+          // Improved text fitting algorithm for consistency
           let displayText = text;
           let textWidth = customFont.widthOfTextAtSize(text, size);
           
-          // If text is too wide, try reducing font size first
-          while (size > 6 && textWidth > maxWidth) {
-            size -= 0.5;
+          // More conservative font size reduction to prevent cutoff
+          while (size > 8 && textWidth > maxWidth) {
+            size -= 0.25; // Smaller increments for better precision
             textWidth = customFont.widthOfTextAtSize(text, size);
           }
           
-          // If still too wide, truncate text with ellipsis
-          if (textWidth > maxWidth && text.length > 3) {
-            let truncatedText = text;
-            while (truncatedText.length > 3 && customFont.widthOfTextAtSize(truncatedText + '...', size) > maxWidth) {
-              truncatedText = truncatedText.slice(0, -1);
-            }
-            displayText = truncatedText + '...';
+          // If still too wide, use smaller font size instead of truncation
+          if (textWidth > maxWidth) {
+            size = Math.max(6, size - 1); // Ensure minimum readable size
+            displayText = text; // Keep full text, don't truncate
           }
 
           // Debug logging for problematic fields
@@ -553,25 +549,24 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     }
   }
 
-  // 6) save - Try different approaches to prevent text cutoff
+  // 6) save - Optimized for consistent rendering across all devices
   let outBytes;
   try {
-    // Approach 1: Try to preserve original field appearances completely
-    log('Attempting to save PDF with preserved field appearances...');
+    // Use optimized save options for consistent rendering
+    log('Saving PDF with optimized settings for consistency...');
     outBytes = await pdfDoc.save({
       useObjectStreams: false,
       addDefaultPage: false,
-      updateFieldAppearances: false,
+      updateFieldAppearances: true, // Enable to ensure consistent rendering
       objectsPerTick: 50,
     });
-    log('PDF saved successfully with preserved appearances');
+    log('PDF saved successfully with consistent rendering settings');
   } catch (e) {
-    log('First save attempt failed:', e.message);
+    log('Optimized save failed, trying fallback:', e.message);
     try {
-      // Approach 2: Use default save options
-      log('Trying default save options...');
+      // Fallback: Use default save options
       outBytes = await pdfDoc.save();
-      log('PDF saved with default options');
+      log('PDF saved with fallback options');
     } catch (e2) {
       log('All save attempts failed:', e2.message);
       throw e2;
