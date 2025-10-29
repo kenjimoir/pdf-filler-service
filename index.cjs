@@ -9,7 +9,7 @@ const express = require('express');
 const cors = require('cors');
 const { PDFDocument, rgb, degrees, PDFName, PDFBool, PDFDict, PDFString, PDFNumber } = require('pdf-lib');
 const { google } = require('googleapis');
-// const fontkit = require('@pdf-lib/fontkit'); // Not needed for Helvetica
+const fontkit = require('@pdf-lib/fontkit');
 
 const PORT = process.env.PORT || 8080;
 const TMP = path.join(os.tmpdir(), 'pdf-filler');
@@ -156,14 +156,40 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
 
-  // 1) font - Use Helvetica (standard PDF font)
+  // 1) font - Use system font that supports Japanese
+  try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
   let customFont = null;
-  try {
-    customFont = await pdfDoc.embedFont('Helvetica');
-    log('Using Helvetica font (standard PDF font)');
-  } catch (e) {
-    log('Helvetica embed failed, using default font:', e.message);
-    // Fallback to default font - no custom font needed
+  
+  // Try to use system fonts that support Japanese
+  const systemFonts = [
+    '/System/Library/Fonts/Helvetica.ttc', // macOS
+    '/System/Library/Fonts/Arial.ttf',     // macOS
+    'C:/Windows/Fonts/arial.ttf',         // Windows
+    'C:/Windows/Fonts/msgothic.ttc',       // Windows (Japanese)
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', // Linux
+  ];
+  
+  for (const fontPath of systemFonts) {
+    try {
+      if (fs.existsSync(fontPath)) {
+        const fontBytes = fs.readFileSync(fontPath);
+        customFont = await pdfDoc.embedFont(fontBytes);
+        log('Using system font:', fontPath);
+        break;
+      }
+    } catch (e) {
+      log('Font embed failed for', fontPath, e.message);
+    }
+  }
+  
+  // If no system font worked, try to embed Helvetica (fallback)
+  if (!customFont) {
+    try {
+      customFont = await pdfDoc.embedFont('Helvetica');
+      log('Using Helvetica fallback font');
+    } catch (e) {
+      log('All font embedding failed, using PDF default font:', e.message);
+    }
   }
 
   // 2) AcroForm default appearance (only if custom font is available)
