@@ -900,7 +900,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     outBytes = await pdfDoc.save({
       useObjectStreams: false,
       addDefaultPage: false,
-      updateFieldAppearances: false, // Preserve template auto-sizing - only fields we explicitly updated will have new appearances
+      updateFieldAppearances: true, // Required for checkboxes to render - address auto-sizing preserved by skipping burn-in
       objectsPerTick: 50,
       // Additional options for consistency and font embedding
       compress: true,
@@ -915,7 +915,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
       outBytes = await pdfDoc.save({
         useObjectStreams: false,
         addDefaultPage: false,
-        updateFieldAppearances: false, // Preserve template auto-sizing
+        updateFieldAppearances: true, // Required for checkboxes to render
       });
       log('PDF saved with standard options');
     } catch (e2) {
