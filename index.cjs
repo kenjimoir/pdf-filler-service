@@ -156,65 +156,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
 
-  // 1) font - Use system font that supports Japanese
-  try { pdfDoc.registerFontkit(fontkit); } catch (_) {}
-  let customFont = null;
-  
-  // Try to use system fonts that support Japanese
-  const systemFonts = [
-    '/System/Library/Fonts/Helvetica.ttc', // macOS
-    '/System/Library/Fonts/Arial.ttf',     // macOS
-    'C:/Windows/Fonts/arial.ttf',         // Windows
-    'C:/Windows/Fonts/msgothic.ttc',       // Windows (Japanese)
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', // Linux
-  ];
-  
-  for (const fontPath of systemFonts) {
-    try {
-      if (fs.existsSync(fontPath)) {
-        const fontBytes = fs.readFileSync(fontPath);
-        customFont = await pdfDoc.embedFont(fontBytes);
-        log('Using system font:', fontPath);
-        break;
-      }
-    } catch (e) {
-      log('Font embed failed for', fontPath, e.message);
-    }
-  }
-  
-  // If no system font worked, try to embed Helvetica (fallback)
-  if (!customFont) {
-    try {
-      customFont = await pdfDoc.embedFont('Helvetica');
-      log('Using Helvetica fallback font');
-    } catch (e) {
-      log('All font embedding failed, using PDF default font:', e.message);
-    }
-  }
-
-  // 2) AcroForm default appearance (only if custom font is available)
-  if (customFont) {
-  let acroFormRef = pdfDoc.catalog.get(PDFName.of('AcroForm'));
-  let acroForm = acroFormRef ? pdfDoc.context.lookup(acroFormRef, PDFDict) : null;
-  if (!acroForm) {
-    acroForm = pdfDoc.context.obj({});
-    pdfDoc.catalog.set(PDFName.of('AcroForm'), acroForm);
-  }
-  const dr = acroForm.get(PDFName.of('DR')) || pdfDoc.context.obj({});
-  const drFont = dr.get(PDFName.of('Font')) || pdfDoc.context.obj({});
-  drFont.set(PDFName.of('F0'), customFont.ref);
-  dr.set(PDFName.of('Font'), drFont);
-  acroForm.set(PDFName.of('DR'), dr);
-
-    // DON'T set global DA - it forces checkboxes to use text font instead of ZapfDingbats
-    // Text fields will still get the correct font via explicit updateAppearances(customFont) calls
-    // acroForm.set(PDFName.of('DA'), PDFString.of('/F0 12 Tf 0 g')); // REMOVED - breaks checkboxes
-    // NeedAppearances not set - let template's original value remain (avoid PDFBool API issues)
-    
-    log('Helvetica font embedding enabled');
-  } else {
-    log('Using PDF default font (no custom font embedding)');
-  }
+  // Use template's existing fonts - don't override them
+  // Template has ヒラギノ明朝 ProN W3 which supports Japanese
 
   // 3) fill
   const form = pdfDoc.getForm();
@@ -271,17 +214,7 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
-        // Update appearances to use Japanese-compatible font
-        // Setting updateFieldAppearances: false on save will preserve template auto-sizing
-        if (customFont) {
-          try { 
-            f.updateAppearances(customFont);
-            const isAddressField = name.includes('Address') || name.includes('住所') || name.includes('FullAddress');
-            if (isAddressField) {
-              log(`Updated appearance for address field "${name}" with auto-sizing preserved`);
-            }
-          } catch (_) {}
-        }
+        // Don't call updateAppearances - preserve template's font and auto-sizing
         filled++;
         if (name === 'DestinationOtherText') {
           log(`✅ Set text field ${name} to: "${valRaw}"`);
@@ -575,16 +508,12 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               
               if (shouldCheck) {
                 f.check();
-                if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                  try { f.updateAppearances(customFont); } catch (_) {}
-                }
+                // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
                 filled++;
                 log(`✅ Checked ${n}`);
               } else {
                 f.uncheck();
-                if (!RESPECT_TEMPLATE_APPEARANCE && customFont) {
-                  try { f.updateAppearances(customFont); } catch (_) {}
-                }
+                // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
                 log(`❌ Unchecked ${n}`);
             }
           } else {
@@ -748,8 +677,8 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
   }
   log('===== END CHECKBOX GROUPS =====');
 
-  // 4) Burn-in (optional) - Re-enabled with improved text handling for consistency
-  if (FORCE_BURN_IN && !RESPECT_TEMPLATE_APPEARANCE) {
+  // 4) Burn-in DISABLED - breaks template auto-sizing, use template's native behavior instead
+  if (false) { // Always skip burn-in - preserve template auto-sizing
     try {
       let burned = 0;
       for (const f of allFields) {
