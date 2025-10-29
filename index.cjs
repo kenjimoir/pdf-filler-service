@@ -270,12 +270,10 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
     if (ctor.includes('Text')) {
       if (valRaw != null && valRaw !== '') {
         f.setText(String(valRaw));
-        // Skip updateAppearances for address fields to preserve template auto-sizing
-        const isAddressField = name.includes('Address') || name.includes('住所') || name.includes('FullAddress');
-        if (customFont && !isAddressField) {
+        // Always update appearances to use Japanese-compatible font
+        // (updateAppearances doesn't break auto-sizing - burn-in does)
+        if (customFont) {
           try { f.updateAppearances(customFont); } catch (_) {}
-        } else if (isAddressField) {
-          log(`Skipping updateAppearances for address field "${name}" to preserve template auto-sizing`);
         }
         filled++;
         if (name === 'DestinationOtherText') {
