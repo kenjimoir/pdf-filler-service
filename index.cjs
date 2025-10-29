@@ -239,11 +239,30 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
 
     // Handle checkboxes with same field name but different export values
     if (ctor.includes('Check')) {
+      // TEMPORARY: Disable export value checking to prevent crashes
+      const USE_EXPORT_VALUE_CHECKING = false;
+      
       // Handle CoverageValue checkboxes with export values (日/月)
       if (name === 'CoverageValue') {
+        if (USE_EXPORT_VALUE_CHECKING) {
         try {
-          // Get the export value of this specific checkbox
-          const exportValue = f.getExportValues ? f.getExportValues()[0] : '';
+          // Get the export value of this specific checkbox - use safer method
+          let exportValue = '';
+          try {
+            // Try different methods to get export value
+            if (f.getExportValues && typeof f.getExportValues === 'function') {
+              const exports = f.getExportValues();
+              exportValue = exports && exports.length > 0 ? exports[0] : '';
+            } else if (f.exportValues && f.exportValues.length > 0) {
+              exportValue = f.exportValues[0];
+            } else if (f.options && f.options.length > 0) {
+              exportValue = f.options[0];
+            }
+          } catch (exportError) {
+            log(`Warning: Could not get export value for ${name}: ${exportError.message}`);
+            exportValue = '';
+          }
+          
           log(`CoverageValue checkbox: fieldName="${name}", exportValue="${exportValue}", inputValue="${fields.CoverageValue}"`);
           
           // Check if this checkbox's export value matches the input value
@@ -277,6 +296,24 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               try { f.updateAppearances(customFont); } catch (_) {}
             }
             log(`❌ Unchecked CoverageValue checkbox (fallback, no match for value: ${valRaw})`);
+          }
+        }
+        } else {
+          // Fallback to simple checkbox logic when export value checking is disabled
+          log(`CoverageValue checkbox (fallback mode): fieldName="${name}", inputValue="${fields.CoverageValue}"`);
+          if (fields.CoverageValue === '月' || fields.CoverageValue === '日') {
+            f.check();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { f.updateAppearances(customFont); } catch (_) {}
+            }
+            filled++;
+            log(`✅ Checked CoverageValue checkbox (fallback, value: ${fields.CoverageValue})`);
+          } else {
+            f.uncheck();
+            if (!RESPECT_TEMPLATE_APPEARANCE) {
+              try { f.updateAppearances(customFont); } catch (_) {}
+            }
+            log(`❌ Unchecked CoverageValue checkbox (fallback, no match for value: ${fields.CoverageValue})`);
           }
         }
         continue;
@@ -421,8 +458,25 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
             log(`TravelerSex checkbox ${n}: value="${travelerSexValue}"`);
             
             // Handle gender checkboxes with same field name but different export values
+            if (USE_EXPORT_VALUE_CHECKING) {
             try {
-              const exportValue = f.getExportValues ? f.getExportValues()[0] : '';
+              // Get the export value of this specific checkbox - use safer method
+              let exportValue = '';
+              try {
+                // Try different methods to get export value
+                if (f.getExportValues && typeof f.getExportValues === 'function') {
+                  const exports = f.getExportValues();
+                  exportValue = exports && exports.length > 0 ? exports[0] : '';
+                } else if (f.exportValues && f.exportValues.length > 0) {
+                  exportValue = f.exportValues[0];
+                } else if (f.options && f.options.length > 0) {
+                  exportValue = f.options[0];
+                }
+              } catch (exportError) {
+                log(`Warning: Could not get export value for ${n}: ${exportError.message}`);
+                exportValue = '';
+              }
+              
               log(`TravelerSex checkbox: fieldName="${n}", exportValue="${exportValue}", inputValue="${travelerSexValue}"`);
               
               // Check if this checkbox's export value matches the input value
@@ -444,6 +498,10 @@ async function fillPdf(srcPath, outPath, fields = {}, opts = {}) {
               }
             } catch (e) {
               log(`Error handling TravelerSex checkbox export values: ${e.message}`);
+            }
+            } else {
+              // Fallback to simple checkbox logic when export value checking is disabled
+              log(`TravelerSex checkbox (fallback mode): fieldName="${n}", inputValue="${travelerSexValue}"`);
             }
             
             // Fallback to old behavior if export value handling fails
