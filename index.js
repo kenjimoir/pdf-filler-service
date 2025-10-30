@@ -105,7 +105,7 @@ function generateFDF(fields) {
   return fdf;
 }
 
-// Fill PDF using PDFtk
+// Fill PDF using PDFtk, then flatten with Ghostscript to avoid checkbox/font blob issues
 async function fillPdfWithPDFtk(templatePath, outputPath, fields) {
   console.log(`📝 Filling PDF with PDFtk...`);
   console.log(`   Template: ${templatePath}`);
@@ -118,22 +118,25 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields) {
   fs.writeFileSync(fdfPath, fdfContent, 'utf8');
   
   try {
-    // Use PDFtk to fill the form
-    // The 'flatten' option converts form fields to static text
-    const command = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}" flatten`;
-    console.log(`🔧 Running: ${command}`);
-    
-    const { stdout, stderr } = await execAsync(command);
-    
-    if (stderr) {
-      console.warn(`⚠️ PDFtk stderr: ${stderr}`);
-    }
+    // 1) Fill with PDFtk WITHOUT flatten to preserve widget appearances
+    const filledPath = path.join(TMP, `filled_${Date.now()}.pdf`);
+    const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${filledPath}"`;
+    console.log(`🔧 Running: ${pdftkCmd}`);
+    const { stdout: pdftkOut, stderr: pdftkErr } = await execAsync(pdftkCmd);
+    if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
+
+    // 2) Flatten using Ghostscript (more robust with checkbox fonts like Adobe Pi)
+    const gsCmd = `gs -dBATCH -dNOPAUSE -dSAFER -sDEVICE=pdfwrite -dPDFSETTINGS=/prepress -dDetectDuplicateImages=true -dCompressFonts=true -sOutputFile="${outputPath}" "${filledPath}"`;
+    console.log(`🔧 Running: ${gsCmd}`);
+    const { stdout: gsOut, stderr: gsErr } = await execAsync(gsCmd);
+    if (gsErr) console.warn(`⚠️ Ghostscript stderr: ${gsErr}`);
     
     console.log(`✅ PDF filled successfully with PDFtk`);
     console.log(`   Output size: ${fs.statSync(outputPath).size} bytes`);
     
     // Clean up FDF file
     fs.unlinkSync(fdfPath);
+    try { if (fs.existsSync(filledPath)) fs.unlinkSync(filledPath); } catch (_) {}
     
     return { success: true, size: fs.statSync(outputPath).size };
     
