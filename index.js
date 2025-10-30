@@ -21,6 +21,7 @@ if (!fs.existsSync(TMP)) {
 
 // Initialize Google Drive client
 function getDriveClient() {
+  // Option 1: JSON string in environment variable
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
     const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
     const auth = new google.auth.GoogleAuth({
@@ -29,7 +30,17 @@ function getDriveClient() {
     });
     return google.drive({ version: 'v3', auth });
   }
-  throw new Error('GOOGLE_CREDENTIALS_JSON not set');
+  
+  // Option 2: File path in environment variable (Render file-based secrets)
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const auth = new google.auth.GoogleAuth({
+      keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      scopes: ['https://www.googleapis.com/auth/drive'],
+    });
+    return google.drive({ version: 'v3', auth });
+  }
+  
+  throw new Error('Either GOOGLE_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS must be set');
 }
 
 // Load and embed Japanese font
