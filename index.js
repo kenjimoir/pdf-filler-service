@@ -145,29 +145,32 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
     
     try {
       if (fieldType.includes('TextField')) {
-        // Text field: Set font FIRST, then text (matches index.cjs approach)
+        // Text field: MANDATORY font application to prevent WinAnsi fallback
         const textValue = String(value);
         
-        // Set font FIRST - this sets the field's default appearance to use Identity-H encoding
-        if (customFont) {
-          try {
-            field.updateAppearances(customFont);
-          } catch (fontError) {
-            console.warn(`⚠️ Font update failed for "${fieldName}": ${fontError.message}`);
-            // Continue without font - may cause WinAnsi errors
-          }
+        // Font application is MANDATORY - no fallback allowed
+        if (!customFont) {
+          console.warn(`⚠️ Skipping text field "${fieldName}" - no custom font available`);
+          continue; // Skip this field entirely
         }
         
-        // Then set text - font is now set to handle Japanese characters
+        try {
+          // Set font FIRST - this MUST succeed to prevent WinAnsi fallback
+          field.updateAppearances(customFont);
+          console.log(`✅ Applied custom font to text field "${fieldName}"`);
+        } catch (fontError) {
+          console.warn(`⚠️ Skipping text field "${fieldName}" - font application failed: ${fontError.message}`);
+          continue; // Skip this field entirely - don't allow WinAnsi fallback
+        }
+        
+        // Now set text - font is guaranteed to be applied
         try {
           field.setText(textValue);
           filledCount++;
+          console.log(`✅ Set text field "${fieldName}" to: "${textValue}"`);
         } catch (textError) {
-          if (textError.message && textError.message.includes('WinAnsi')) {
-            console.warn(`⚠️ WinAnsi error on "${fieldName}" - skipping this field`);
-          } else {
-            console.warn(`⚠️ Text error on "${fieldName}": ${textError.message}`);
-          }
+          console.warn(`⚠️ Skipping text field "${fieldName}" - text setting failed: ${textError.message}`);
+          // Skip this field - don't retry without font
         }
         
       } else if (fieldType.includes('CheckBox')) {
@@ -201,14 +204,27 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
     }
   }
   
-  // NOTE: We're relying on manual updateAppearances() calls above
-  // Setting AcroForm DA might interfere with checkbox rendering
-  // So we skip it and trust that updateAppearances(customFont) worked for text fields
+  // Set AcroForm default appearance to use custom font
+  // This ensures updateFieldAppearances: true uses the correct font
+  if (customFont) {
+    try {
+      const acroForm = pdfDoc.catalog.get(PDFName.of('AcroForm'));
+      if (acroForm) {
+        // Set DA to use the custom font (fonts are typically F0, F1, etc.)
+        // We'll use F0 as the default font reference
+        const daString = '/F0 12 Tf 0 g'; // Font F0, size 12, color black
+        acroForm.set(PDFName.of('DA'), PDFString.of(daString));
+        console.log('✅ Set AcroForm default appearance to use custom font');
+      }
+    } catch (daError) {
+      console.warn(`⚠️ Failed to set AcroForm DA: ${daError.message}`);
+    }
+  }
   
-  // Save with updateFieldAppearances: false to preserve our manual appearances
-  // The DA we set above will be used if any fields need default font
+  // Save with updateFieldAppearances: true to generate appearance streams
+  // This ensures text fields are visually displayed without clicking
   const pdfBytes = await pdfDoc.save({
-    updateFieldAppearances: false,  // Don't recalculate - use our manual updates
+    updateFieldAppearances: true,  // Generate appearance streams for visual display
     useObjectStreams: false,
     addDefaultPage: false,
   });
@@ -312,18 +328,29 @@ app.post('/fill', async (req, res) => {
     // 2. Load font (reuse the PDF document from fillPdf)
     let customFont = null;
     
-    try {
-      // Load PDF first to pass to font loading
-      const templateBytes = fs.readFileSync(templatePath);
-      if (templateBytes.length === 0) {
-        throw new Error(`Template file is empty: ${templatePath}`);
+    // Load PDF first to pass to font loading
+    const templateBytes = fs.readFileSync(templatePath);
+    if (templateBytes.length === 0) {
+      throw new Error(`Template file is empty: ${templatePath}`);
+    }
+    
+    const pdfDoc = await PDFDocument.load(templateBytes, { updateFieldAppearances: false });
+    
+    // Check if we have any text fields that might contain Japanese text
+    const form = pdfDoc.getForm();
+    const allFields = form.getFields();
+    const hasTextFields = allFields.some(field => field.constructor.name.includes('TextField'));
+    
+    if (hasTextFields) {
+      // Font loading is MANDATORY for text fields - fail if it doesn't work
+      try {
+        customFont = await loadJapaneseFont(pdfDoc);
+        console.log('✅ Custom font loaded successfully');
+      } catch (fontError) {
+        throw new Error(`Font loading is mandatory for Japanese text: ${fontError.message}`);
       }
-      
-      const pdfDoc = await PDFDocument.load(templateBytes, { updateFieldAppearances: false });
-      customFont = await loadJapaneseFont(pdfDoc);
-    } catch (fontError) {
-      console.warn(`⚠️ Font loading failed: ${fontError.message}`);
-      console.warn(`   Continuing without custom font (may cause WinAnsi errors)`);
+    } else {
+      console.log('ℹ️ No text fields found - skipping font loading');
     }
     
     // 3. Fill PDF with timeout
