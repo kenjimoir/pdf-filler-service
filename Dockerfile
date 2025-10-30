@@ -1,7 +1,7 @@
 FROM node:18
 
-# Install PDFtk and Ghostscript (for reliable flattening)
-RUN apt-get update && apt-get install -y pdftk ghostscript && rm -rf /var/lib/apt/lists/*
+# Install PDFtk, Ghostscript (optional), and qpdf (for appearance cleanup)
+RUN apt-get update && apt-get install -y pdftk ghostscript qpdf && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
