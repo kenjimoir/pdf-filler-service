@@ -1,17 +1,19 @@
-// PDF Filler v2 - Clean implementation with Japanese font support
-// Strategy: Manual appearance updates + save with updateFieldAppearances: false
+// PDF Filler using PDFtk - Reliable Japanese text support
+// This service uses PDFtk (PDF Toolkit) instead of pdf-lib for better Unicode support
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
-const { PDFDocument, PDFName, PDFString } = require('pdf-lib');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 const { google } = require('googleapis');
-const fontkit = require('@pdf-lib/fontkit');
+
+const execAsync = promisify(exec);
 
 const PORT = process.env.PORT || 8080;
-const TMP = path.join(os.tmpdir(), 'pdf-filler-v2');
+const TMP = path.join(os.tmpdir(), 'pdf-filler-pdftk');
 const OUTPUT_FOLDER_ID = process.env.OUTPUT_FOLDER_ID;
 
 // Ensure temp directory exists
@@ -47,193 +49,80 @@ function getDriveClient() {
   throw new Error('Either GOOGLE_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS must be set');
 }
 
-// Load and embed Japanese font
-async function loadJapaneseFont(pdfDoc) {
-  const fontFileName = process.env.FONT_TTF_PATH || 'fonts/NotoSansCJKjp-Regular.otf';
+// Generate FDF (Form Data Format) content from fields
+function generateFDF(fields) {
+  let fdf = '%FDF-1.2\n';
+  fdf += '1 0 obj\n';
+  fdf += '<<\n';
+  fdf += '/FDF\n';
+  fdf += '<<\n';
+  fdf += '/Fields [\n';
   
-  // Try multiple paths
-  const possiblePaths = [
-    path.join(__dirname, fontFileName),
-    path.join(__dirname, 'fonts', path.basename(fontFileName)),
-    path.join(process.cwd(), fontFileName),
-    path.join(process.cwd(), 'fonts', path.basename(fontFileName)),
-  ];
-  
-  let fontPath = null;
-  for (const tryPath of possiblePaths) {
-    if (fs.existsSync(tryPath)) {
-      fontPath = tryPath;
-      break;
+  // Add each field to FDF
+  for (const [fieldName, value] of Object.entries(fields)) {
+    if (value != null && value !== '') {
+      fdf += '<<\n';
+      fdf += `/T (${fieldName})\n`;
+      fdf += `/V (${String(value).replace(/[()\\]/g, '\\$&')})\n`; // Escape special characters
+      fdf += '>>\n';
     }
   }
   
-  if (!fontPath) {
-    throw new Error(`Font file not found. Tried: ${possiblePaths.join(', ')}`);
-  }
+  fdf += ']\n';
+  fdf += '>>\n';
+  fdf += '>>\n';
+  fdf += 'endobj\n';
+  fdf += 'trailer\n';
+  fdf += '<<\n';
+  fdf += '/Root 1 0 R\n';
+  fdf += '>>\n';
+  fdf += '%%EOF\n';
   
-  // Reject TTC files
-  if (fontPath.toLowerCase().endsWith('.ttc')) {
-    // Try fallback
-    const fallback = path.join(__dirname, 'fonts', 'NotoSansCJKjp-Regular.otf');
-    if (fs.existsSync(fallback)) {
-      fontPath = fallback;
-    } else {
-      throw new Error('TTC files not supported. Please use OTF or TTF font.');
-    }
-  }
-  
-  pdfDoc.registerFontkit(fontkit);
-  const fontBytes = fs.readFileSync(fontPath);
-  const customFont = await pdfDoc.embedFont(fontBytes);
-  
-  if (!customFont) {
-    throw new Error(`Failed to embed font - embedFont() returned null/undefined`);
-  }
-  
-  console.log(`✅ Loaded Japanese font from: ${fontPath}`);
-  console.log(`   Font object: valid, size: ${fontBytes.length} bytes`);
-  return customFont;
+  return fdf;
 }
 
-// Fill PDF with fields
-async function fillPdf(srcPath, outPath, fields, customFont) {
-  console.log(`📝 Starting PDF fill process...`);
-  console.log(`   Template: ${srcPath}`);
-  console.log(`   Output: ${outPath}`);
-  console.log(`   Fields to fill: ${Object.keys(fields).length}`);
-  console.log(`   Custom font: ${customFont ? 'loaded' : 'not loaded'}`);
+// Fill PDF using PDFtk
+async function fillPdfWithPDFtk(templatePath, outputPath, fields) {
+  console.log(`📝 Filling PDF with PDFtk...`);
+  console.log(`   Template: ${templatePath}`);
+  console.log(`   Output: ${outputPath}`);
+  console.log(`   Fields: ${Object.keys(fields).length}`);
   
-  const bytes = fs.readFileSync(srcPath);
-  if (bytes.length === 0) {
-    throw new Error(`Template file is empty: ${srcPath}`);
-  }
+  // Generate FDF content
+  const fdfContent = generateFDF(fields);
+  const fdfPath = path.join(TMP, `data_${Date.now()}.fdf`);
+  fs.writeFileSync(fdfPath, fdfContent, 'utf8');
   
-  const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
-  if (!pdfDoc) {
-    throw new Error(`Failed to load PDF document from: ${srcPath}`);
-  }
-  
-  const form = pdfDoc.getForm();
-  const allFields = form.getFields();
-  
-  console.log(`📋 Found ${allFields.length} form fields in template`);
-  
-  let filledCount = 0;
-  let processedCount = 0;
-  
-  // Fill fields with timeout protection
-  const startTime = Date.now();
-  const MAX_PROCESSING_TIME = 30000; // 30 seconds max
-  
-  for (const field of allFields) {
-    // Check timeout
-    if (Date.now() - startTime > MAX_PROCESSING_TIME) {
-      throw new Error(`PDF processing timeout after ${MAX_PROCESSING_TIME}ms`);
+  try {
+    // Use PDFtk to fill the form
+    // The 'flatten' option converts form fields to static text
+    const command = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}" flatten`;
+    console.log(`🔧 Running: ${command}`);
+    
+    const { stdout, stderr } = await execAsync(command);
+    
+    if (stderr) {
+      console.warn(`⚠️ PDFtk stderr: ${stderr}`);
     }
     
-    processedCount++;
-    const fieldName = field.getName();
-    const fieldType = field.constructor.name;
-    const value = fields[fieldName];
+    console.log(`✅ PDF filled successfully with PDFtk`);
+    console.log(`   Output size: ${fs.statSync(outputPath).size} bytes`);
     
-    if (value == null || value === '') {
-      if (processedCount % 20 === 0) {
-        console.log(`   Processed ${processedCount}/${allFields.length} fields...`);
-      }
-      continue;
+    // Clean up FDF file
+    fs.unlinkSync(fdfPath);
+    
+    return { success: true, size: fs.statSync(outputPath).size };
+    
+  } catch (error) {
+    console.error(`❌ PDFtk error: ${error.message}`);
+    
+    // Clean up FDF file on error
+    if (fs.existsSync(fdfPath)) {
+      fs.unlinkSync(fdfPath);
     }
     
-    try {
-      if (fieldType.includes('TextField')) {
-        // Text field: MANDATORY font application to prevent WinAnsi fallback
-        const textValue = String(value);
-        
-        // Font application is MANDATORY - no fallback allowed
-        if (!customFont) {
-          console.warn(`⚠️ Skipping text field "${fieldName}" - no custom font available`);
-          continue; // Skip this field entirely
-        }
-        
-        try {
-          // Set font FIRST - this MUST succeed to prevent WinAnsi fallback
-          field.updateAppearances(customFont);
-          console.log(`✅ Applied custom font to text field "${fieldName}"`);
-        } catch (fontError) {
-          console.warn(`⚠️ Skipping text field "${fieldName}" - font application failed: ${fontError.message}`);
-          continue; // Skip this field entirely - don't allow WinAnsi fallback
-        }
-        
-        // Now set text - font is guaranteed to be applied
-        try {
-          field.setText(textValue);
-          filledCount++;
-          console.log(`✅ Set text field "${fieldName}" to: "${textValue}"`);
-        } catch (textError) {
-          console.warn(`⚠️ Skipping text field "${fieldName}" - text setting failed: ${textError.message}`);
-          // Skip this field - don't retry without font
-        }
-        
-      } else if (fieldType.includes('CheckBox')) {
-        // Checkbox: check/uncheck then update appearance (no font - uses ZapfDingbats)
-        const shouldCheck = (
-          value === 'on' ||
-          value === 'yes' ||
-          value === 'true' ||
-          value === '1' ||
-          value === 'はい' ||
-          String(value).toUpperCase() === 'TRUE'
-        );
-        
-        if (shouldCheck) {
-          field.check();
-        } else {
-          field.uncheck();
-        }
-        
-        // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
-        filledCount++;
-        
-      } else if (fieldType.includes('Dropdown')) {
-        // Dropdown: select value
-        field.select(String(value));
-        // Don't call updateAppearances on dropdowns - they use default fonts
-        filledCount++;
-      }
-    } catch (error) {
-      console.warn(`⚠️ Failed to fill field "${fieldName}": ${error.message}`);
-    }
+    throw new Error(`PDFtk failed: ${error.message}`);
   }
-  
-  // Set AcroForm default appearance to use custom font
-  // This ensures updateFieldAppearances: true uses the correct font
-  if (customFont) {
-    try {
-      const acroForm = pdfDoc.catalog.get(PDFName.of('AcroForm'));
-      if (acroForm) {
-        // Get the font reference from the embedded font using context.register
-        const fontRef = pdfDoc.context.register(customFont);
-        // Set default appearance: /FontName FontSize Tf Color
-        const daString = `/${fontRef} 12 Tf 0 g`;
-        acroForm.set(PDFName.of('DA'), PDFString.of(daString));
-        console.log(`✅ Set AcroForm default appearance to use custom font: ${daString}`);
-      }
-    } catch (daError) {
-      console.warn(`⚠️ Failed to set AcroForm DA: ${daError.message}`);
-    }
-  }
-  
-  // Save with updateFieldAppearances: true to generate appearance streams
-  // The AcroForm DA should ensure it uses our custom font
-  const pdfBytes = await pdfDoc.save({
-    updateFieldAppearances: true,  // Generate appearance streams for visual display
-    useObjectStreams: false,
-    addDefaultPage: false,
-  });
-  
-  fs.writeFileSync(outPath, pdfBytes);
-  console.log(`✅ Filled ${filledCount} fields, saved to: ${outPath}`);
-  
-  return { filled: filledCount, size: pdfBytes.length };
 }
 
 // Upload to Google Drive
@@ -258,7 +147,6 @@ async function uploadToDrive(drive, filePath, fileName, folderId) {
     }
   }
   
-  // Use the verified folderId (already set above as finalFolderId)
   const parents = finalFolderId ? [finalFolderId] : [];
   
   const fileMetadata = {
@@ -272,13 +160,29 @@ async function uploadToDrive(drive, filePath, fileName, folderId) {
   };
   
   const file = await drive.files.create({
-    requestBody: fileMetadata, // Use requestBody (matches old service format)
+    requestBody: fileMetadata,
     media: media,
     fields: 'id, name, webViewLink, webContentLink',
-    supportsAllDrives: true, // Support Shared Drives
+    supportsAllDrives: true,
   });
   
   return file.data;
+}
+
+// Check if PDFtk is available
+async function checkPDFtk() {
+  try {
+    const { stdout } = await execAsync('pdftk --version');
+    console.log(`✅ PDFtk found: ${stdout.trim()}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ PDFtk not found: ${error.message}`);
+    console.error(`   Please install PDFtk on your system`);
+    console.error(`   Ubuntu/Debian: sudo apt-get install pdftk`);
+    console.error(`   macOS: brew install pdftk-java`);
+    console.error(`   Or use: apt-get install pdftk-java`);
+    return false;
+  }
 }
 
 // HTTP Server
@@ -287,14 +191,16 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/', (_req, res) => {
-  res.json({ service: 'PDF Filler v2', status: 'running' });
+  res.json({ service: 'PDF Filler PDFtk', status: 'running' });
 });
 
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
+  const pdftkAvailable = await checkPDFtk();
   res.json({
     ok: true,
-    fontPath: process.env.FONT_TTF_PATH || 'fonts/NotoSansCJKjp-Regular.otf',
+    pdftkAvailable,
     outputFolder: OUTPUT_FOLDER_ID || 'not set',
+    tempDir: TMP,
   });
 });
 
@@ -303,6 +209,15 @@ app.post('/fill', async (req, res) => {
   
   if (!templateFileId || !fields) {
     return res.status(400).json({ error: 'Missing templateFileId or fields' });
+  }
+  
+  // Check if PDFtk is available
+  const pdftkAvailable = await checkPDFtk();
+  if (!pdftkAvailable) {
+    return res.status(500).json({ 
+      error: 'PDFtk not available', 
+      detail: 'PDFtk is required but not installed on this system' 
+    });
   }
   
   const drive = getDriveClient();
@@ -326,45 +241,11 @@ app.post('/fill', async (req, res) => {
     });
     console.log('✅ Template downloaded');
     
-    // 2. Load font (reuse the PDF document from fillPdf)
-    let customFont = null;
-    
-    // Load PDF first to pass to font loading
-    const templateBytes = fs.readFileSync(templatePath);
-    if (templateBytes.length === 0) {
-      throw new Error(`Template file is empty: ${templatePath}`);
-    }
-    
-    const pdfDoc = await PDFDocument.load(templateBytes, { updateFieldAppearances: false });
-    
-    // Check if we have any text fields that might contain Japanese text
-    const form = pdfDoc.getForm();
-    const allFields = form.getFields();
-    const hasTextFields = allFields.some(field => field.constructor.name.includes('TextField'));
-    
-    if (hasTextFields) {
-      // Font loading is MANDATORY for text fields - fail if it doesn't work
-      try {
-        customFont = await loadJapaneseFont(pdfDoc);
-        console.log('✅ Custom font loaded successfully');
-      } catch (fontError) {
-        throw new Error(`Font loading is mandatory for Japanese text: ${fontError.message}`);
-      }
-    } else {
-      console.log('ℹ️ No text fields found - skipping font loading');
-    }
-    
-    // 3. Fill PDF with timeout
+    // 2. Fill PDF with PDFtk
     console.log(`📝 Filling PDF with ${Object.keys(fields).length} fields...`);
+    await fillPdfWithPDFtk(templatePath, outputPath, fields);
     
-    const fillPromise = fillPdf(templatePath, outputPath, fields, customFont);
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('PDF fill timeout after 60 seconds')), 60000);
-    });
-    
-    await Promise.race([fillPromise, timeoutPromise]);
-    
-    // 4. Upload to Drive
+    // 3. Upload to Drive
     const finalName = outputName || `filled_${Date.now()}.pdf`;
     console.log(`📤 Uploading to Drive: ${finalName}`);
     const uploadedFile = await uploadToDrive(
@@ -374,7 +255,7 @@ app.post('/fill', async (req, res) => {
       folderId || OUTPUT_FOLDER_ID
     );
     
-    // Cleanup (with error handling)
+    // Cleanup
     try {
       if (fs.existsSync(templatePath)) {
         fs.unlinkSync(templatePath);
@@ -389,6 +270,7 @@ app.post('/fill', async (req, res) => {
     res.json({
       ok: true,
       driveFile: uploadedFile,
+      method: 'pdftk',
     });
     
   } catch (error) {
@@ -401,6 +283,7 @@ app.post('/fill', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 PDF Filler v2 running on port ${PORT}`);
+  console.log(`🚀 PDF Filler PDFtk running on port ${PORT}`);
+  console.log(`   Temp directory: ${TMP}`);
+  console.log(`   Output folder: ${OUTPUT_FOLDER_ID || 'not set'}`);
 });
-
