@@ -189,18 +189,26 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
         if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
       }
     } else {
-      // Two-step: pdftk fill (no flatten) → Ghostscript flatten
+      // Two-step: pdftk fill (no flatten) → ensure appearances → drop XFA → Ghostscript flatten
       const filledPath = path.join(TMP, `filled_${Date.now()}.pdf`);
+      const filledAppearPath = path.join(TMP, `filled_appear_${Date.now()}.pdf`);
       const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${filledPath}"`; 
       console.log(`🔧 Running: ${pdftkCmd}`);
       const { stderr: pdftkErr } = await execAsync(pdftkCmd);
       if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
 
-      const gsCmd = `gs -dBATCH -dNOPAUSE -dSAFER -sDEVICE=pdfwrite -dPDFSETTINGS=/prepress -dDetectDuplicateImages=true -dCompressFonts=true -sOutputFile="${outputPath}" "${filledPath}"`;
+      // Force NeedAppearances and drop XFA so widgets have visual appearances for GS to bake
+      const pdftkAppear = `pdftk "${filledPath}" output "${filledAppearPath}" need_appearances drop_xfa`;
+      console.log(`🔧 Running: ${pdftkAppear}`);
+      const { stderr: pdftkErr2 } = await execAsync(pdftkAppear);
+      if (pdftkErr2) console.warn(`⚠️ PDFtk stderr: ${pdftkErr2}`);
+
+      const gsCmd = `gs -dBATCH -dNOPAUSE -dSAFER -sDEVICE=pdfwrite -dPDFSETTINGS=/prepress -dDetectDuplicateImages=true -dCompressFonts=true -sOutputFile="${outputPath}" "${filledAppearPath}"`;
       console.log(`🔧 Running: ${gsCmd}`);
       const { stderr: gsErr } = await execAsync(gsCmd);
       if (gsErr) console.warn(`⚠️ Ghostscript stderr: ${gsErr}`);
       try { if (fs.existsSync(filledPath)) fs.unlinkSync(filledPath); } catch (_) {}
+      try { if (fs.existsSync(filledAppearPath)) fs.unlinkSync(filledAppearPath); } catch (_) {}
     }
 
     console.log(`✅ PDF filled successfully (${options.flatten ? 'flattened via ' + options.flattenMethod : 'not flattened'})`);
