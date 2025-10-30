@@ -23,12 +23,16 @@ if (!fs.existsSync(TMP)) {
 function getDriveClient() {
   // Option 1: JSON string in environment variable
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
-    const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
-    const auth = new google.auth.GoogleAuth({
-      credentials: creds,
-      scopes: ['https://www.googleapis.com/auth/drive'],
-    });
-    return google.drive({ version: 'v3', auth });
+    try {
+      const creds = JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON);
+      const auth = new google.auth.GoogleAuth({
+        credentials: creds,
+        scopes: ['https://www.googleapis.com/auth/drive'],
+      });
+      return google.drive({ version: 'v3', auth });
+    } catch (parseError) {
+      throw new Error(`Invalid GOOGLE_CREDENTIALS_JSON: ${parseError.message}`);
+    }
   }
   
   // Option 2: File path in environment variable (Render file-based secrets)
@@ -82,8 +86,12 @@ async function loadJapaneseFont(pdfDoc) {
   const fontBytes = fs.readFileSync(fontPath);
   const customFont = await pdfDoc.embedFont(fontBytes);
   
+  if (!customFont) {
+    throw new Error(`Failed to embed font - embedFont() returned null/undefined`);
+  }
+  
   console.log(`✅ Loaded Japanese font from: ${fontPath}`);
-  console.log(`   Font object: ${customFont ? 'valid' : 'invalid'}`);
+  console.log(`   Font object: valid, size: ${fontBytes.length} bytes`);
   return customFont;
 }
 
@@ -96,7 +104,14 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
   console.log(`   Custom font: ${customFont ? 'loaded' : 'not loaded'}`);
   
   const bytes = fs.readFileSync(srcPath);
+  if (bytes.length === 0) {
+    throw new Error(`Template file is empty: ${srcPath}`);
+  }
+  
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
+  if (!pdfDoc) {
+    throw new Error(`Failed to load PDF document from: ${srcPath}`);
+  }
   
   const form = pdfDoc.getForm();
   const allFields = form.getFields();
@@ -130,37 +145,28 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
     
     try {
       if (fieldType.includes('TextField')) {
-        // Text field: simplified approach
+        // Text field: Set font FIRST, then text (matches index.cjs approach)
         const textValue = String(value);
         
-        // Set font first if available
+        // Set font FIRST - this sets the field's default appearance to use Identity-H encoding
         if (customFont) {
           try {
             field.updateAppearances(customFont);
           } catch (fontError) {
             console.warn(`⚠️ Font update failed for "${fieldName}": ${fontError.message}`);
+            // Continue without font - may cause WinAnsi errors
           }
         }
         
-        // Set text
+        // Then set text - font is now set to handle Japanese characters
         try {
           field.setText(textValue);
           filledCount++;
         } catch (textError) {
           if (textError.message && textError.message.includes('WinAnsi')) {
-            console.warn(`⚠️ WinAnsi error on "${fieldName}" - skipping font update`);
-            // Try without font update
-            if (customFont) {
-              try {
-                field.updateAppearances(); // No font parameter
-                field.setText(textValue);
-                filledCount++;
-              } catch (retryError) {
-                console.warn(`⚠️ Retry failed for "${fieldName}": ${retryError.message}`);
-              }
-            }
+            console.warn(`⚠️ WinAnsi error on "${fieldName}" - skipping this field`);
           } else {
-            throw textError;
+            console.warn(`⚠️ Text error on "${fieldName}": ${textError.message}`);
           }
         }
         
@@ -181,16 +187,13 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
           field.uncheck();
         }
         
-        // Update appearance WITHOUT font (checkboxes use ZapfDingbats)
-        field.updateAppearances();
+        // Don't call updateAppearances on checkboxes - they use ZapfDingbats, not custom font
         filledCount++;
         
       } else if (fieldType.includes('Dropdown')) {
         // Dropdown: select value
         field.select(String(value));
-        if (customFont) {
-          field.updateAppearances(customFont);
-        }
+        // Don't call updateAppearances on dropdowns - they use default fonts
         filledCount++;
       }
     } catch (error) {
@@ -306,11 +309,17 @@ app.post('/fill', async (req, res) => {
     });
     console.log('✅ Template downloaded');
     
-    // 2. Load font (with fallback)
-    const pdfDoc = await PDFDocument.load(fs.readFileSync(templatePath));
+    // 2. Load font (reuse the PDF document from fillPdf)
     let customFont = null;
     
     try {
+      // Load PDF first to pass to font loading
+      const templateBytes = fs.readFileSync(templatePath);
+      if (templateBytes.length === 0) {
+        throw new Error(`Template file is empty: ${templatePath}`);
+      }
+      
+      const pdfDoc = await PDFDocument.load(templateBytes, { updateFieldAppearances: false });
       customFont = await loadJapaneseFont(pdfDoc);
     } catch (fontError) {
       console.warn(`⚠️ Font loading failed: ${fontError.message}`);
@@ -337,9 +346,17 @@ app.post('/fill', async (req, res) => {
       folderId || OUTPUT_FOLDER_ID
     );
     
-    // Cleanup
-    fs.unlinkSync(templatePath);
-    fs.unlinkSync(outputPath);
+    // Cleanup (with error handling)
+    try {
+      if (fs.existsSync(templatePath)) {
+        fs.unlinkSync(templatePath);
+      }
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath);
+      }
+    } catch (cleanupError) {
+      console.warn(`⚠️ Cleanup failed: ${cleanupError.message}`);
+    }
     
     res.json({
       ok: true,
