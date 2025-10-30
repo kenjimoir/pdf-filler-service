@@ -107,7 +107,7 @@ function generateFDF(fields) {
 
 // Fill PDF using PDFtk, then flatten with Ghostscript to avoid checkbox/font blob issues
 async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
-  const options = Object.assign({ flatten: true }, opts);
+  const options = Object.assign({ flatten: true, flattenMethod: 'gs' }, opts);
   console.log(`📝 Filling PDF with PDFtk...`);
   console.log(`   Template: ${templatePath}`);
   console.log(`   Output: ${outputPath}`);
@@ -119,14 +119,29 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
   fs.writeFileSync(fdfPath, fdfContent, 'utf8');
   
   try {
-    // Build pdftk command based on flatten option
-    const flattenPart = options.flatten ? ' flatten drop_xfa' : '';
-    const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}"${flattenPart}`;
-    console.log(`🔧 Running: ${pdftkCmd}`);
-    const { stdout: pdftkOut, stderr: pdftkErr } = await execAsync(pdftkCmd);
-    if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
-    
-    console.log(`✅ PDF filled successfully with PDFtk (${options.flatten ? 'flattened' : 'not flattened'})`);
+    if (!options.flatten || options.flattenMethod === 'pdftk') {
+      // Single-step pdftk (optionally flatten)
+      const flattenPart = options.flatten ? ' flatten drop_xfa' : '';
+      const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}"${flattenPart}`;
+      console.log(`🔧 Running: ${pdftkCmd}`);
+      const { stderr: pdftkErr } = await execAsync(pdftkCmd);
+      if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
+    } else {
+      // Two-step: pdftk fill (no flatten) → Ghostscript flatten
+      const filledPath = path.join(TMP, `filled_${Date.now()}.pdf`);
+      const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${filledPath}"`; 
+      console.log(`🔧 Running: ${pdftkCmd}`);
+      const { stderr: pdftkErr } = await execAsync(pdftkCmd);
+      if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
+
+      const gsCmd = `gs -dBATCH -dNOPAUSE -dSAFER -sDEVICE=pdfwrite -dPDFSETTINGS=/prepress -dDetectDuplicateImages=true -dCompressFonts=true -sOutputFile="${outputPath}" "${filledPath}"`;
+      console.log(`🔧 Running: ${gsCmd}`);
+      const { stderr: gsErr } = await execAsync(gsCmd);
+      if (gsErr) console.warn(`⚠️ Ghostscript stderr: ${gsErr}`);
+      try { if (fs.existsSync(filledPath)) fs.unlinkSync(filledPath); } catch (_) {}
+    }
+
+    console.log(`✅ PDF filled successfully (${options.flatten ? 'flattened via ' + options.flattenMethod : 'not flattened'})`);
     console.log(`   Output size: ${fs.statSync(outputPath).size} bytes`);
     
     // Clean up FDF file
@@ -227,7 +242,7 @@ app.get('/health', async (_req, res) => {
 });
 
 app.post('/fill', async (req, res) => {
-  const { templateFileId, fields, outputName, folderId, mode } = req.body;
+  const { templateFileId, fields, outputName, folderId, mode, flattenMethod } = req.body;
   
   if (!templateFileId || !fields) {
     return res.status(400).json({ error: 'Missing templateFileId or fields' });
@@ -297,7 +312,8 @@ app.post('/fill', async (req, res) => {
       // 2. Fill PDF with PDFtk
       console.log(`📝 Filling PDF with ${Object.keys(fields).length} fields...`);
       const flatten = modeStr !== 'preview';
-      await fillPdfWithPDFtk(templatePath, outputPath, fields, { flatten });
+      const fm = String(flattenMethod || 'gs').toLowerCase();
+      await fillPdfWithPDFtk(templatePath, outputPath, fields, { flatten, flattenMethod: fm });
     }
     
     // 3. Upload to Drive
