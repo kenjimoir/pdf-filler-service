@@ -51,8 +51,9 @@ function getDriveClient() {
 
 // Generate FDF (Form Data Format) content from fields
 // Text is encoded as UTF-16BE hex so Japanese renders correctly
-// Checkbox/radio values use name objects (/Yes or /Off) and also set /AS
-function generateFDF(fields) {
+// Checkbox/radio values use name objects (e.g. /Yes, /On, /1) and also set /AS
+// onNameMap: optional map { fieldName: onExportName }
+function generateFDF(fields, onNameMap) {
   const toUtf16Hex = (s) => {
     const str = String(s);
     // Build UTF-16BE buffer with BOM FE FF
@@ -77,13 +78,14 @@ function generateFDF(fields) {
     if (rawVal == null || rawVal === '') continue;
     const fieldName = String(rawName).replace(/[()\\]/g, '\\$&');
     const val = String(rawVal);
-    const isOn = /^(on|yes|true)$/i.test(val);
+    const isOn = /^(on|yes|true|1)$/i.test(val);
     const isOff = /^(off|no|false)$/i.test(val);
 
     fdf += '<<\n';
     fdf += `/T (${fieldName})\n`;
     if (isOn || isOff) {
-      const name = isOn ? 'Yes' : 'Off';
+      const detectedOn = onNameMap && onNameMap[fieldName] ? onNameMap[fieldName] : 'Yes';
+      const name = isOn ? detectedOn : 'Off';
       fdf += `/V /${name}\n`;
       fdf += `/AS /${name}\n`;
     } else {
@@ -105,9 +107,52 @@ function generateFDF(fields) {
   return fdf;
 }
 
+// Detect checkbox/radio on-state names from template via pdftk dump
+async function buildOnNameMap(templatePath) {
+  const map = {};
+  try {
+    const cmd = `pdftk "${templatePath}" dump_data_fields_utf8`;
+    const { stdout } = await execAsync(cmd);
+    const lines = stdout.split(/\r?\n/);
+    let current = {};
+    const flush = () => {
+      if (current.FieldType === 'Button' && current.FieldName) {
+        const options = current.FieldStateOption || [];
+        const onOpt = options.find((o) => o && o.toLowerCase() !== 'off');
+        if (onOpt) {
+          map[current.FieldName] = onOpt;
+        }
+      }
+      current = {};
+    };
+    for (const line of lines) {
+      if (line.trim() === '---') {
+        flush();
+        continue;
+      }
+      const idx = line.indexOf(':');
+      if (idx > -1) {
+        const key = line.slice(0, idx).trim();
+        const value = line.slice(idx + 1).trim();
+        if (key === 'FieldStateOption') {
+          if (!current.FieldStateOption) current.FieldStateOption = [];
+          current.FieldStateOption.push(value);
+        } else {
+          current[key] = value;
+        }
+      }
+    }
+    // flush last
+    flush();
+  } catch (e) {
+    console.warn(`⚠️ Failed to dump field data for on-name detection: ${e.message}`);
+  }
+  return map;
+}
+
 // Fill PDF using PDFtk, then flatten with Ghostscript to avoid checkbox/font blob issues
 async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
-  const options = Object.assign({ flatten: true, flattenMethod: 'pdftk' }, opts);
+  const options = Object.assign({ flatten: true, flattenMethod: 'gs' }, opts);
   if (String(options.flattenMethod || '').toLowerCase() === 'none') {
     options.flatten = false;
   }
@@ -117,7 +162,7 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
   console.log(`   Fields: ${Object.keys(fields).length}`);
   
   // Generate FDF content
-  const fdfContent = generateFDF(fields);
+  const fdfContent = generateFDF(fields, options.onNameMap || null);
   const fdfPath = path.join(TMP, `data_${Date.now()}.fdf`);
   fs.writeFileSync(fdfPath, fdfContent, 'utf8');
   
@@ -329,8 +374,9 @@ app.post('/fill', async (req, res) => {
       // 2. Fill PDF with PDFtk
       console.log(`📝 Filling PDF with ${Object.keys(fields).length} fields...`);
       const flatten = modeStr !== 'preview';
-      const fm = String(flattenMethod || 'pdftk').toLowerCase();
-      await fillPdfWithPDFtk(templatePath, outputPath, fields, { flatten, flattenMethod: fm });
+      const fm = String(flattenMethod || 'gs').toLowerCase();
+      const onNameMap = await buildOnNameMap(templatePath);
+      await fillPdfWithPDFtk(templatePath, outputPath, fields, { flatten, flattenMethod: fm, onNameMap });
     }
     
     // 3. Upload to Drive
