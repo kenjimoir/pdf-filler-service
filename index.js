@@ -89,56 +89,80 @@ async function loadJapaneseFont(pdfDoc) {
 
 // Fill PDF with fields
 async function fillPdf(srcPath, outPath, fields, customFont) {
+  console.log(`📝 Starting PDF fill process...`);
+  console.log(`   Template: ${srcPath}`);
+  console.log(`   Output: ${outPath}`);
+  console.log(`   Fields to fill: ${Object.keys(fields).length}`);
+  console.log(`   Custom font: ${customFont ? 'loaded' : 'not loaded'}`);
+  
   const bytes = fs.readFileSync(srcPath);
   const pdfDoc = await PDFDocument.load(bytes, { updateFieldAppearances: false });
   
   const form = pdfDoc.getForm();
   const allFields = form.getFields();
   
-  let filledCount = 0;
+  console.log(`📋 Found ${allFields.length} form fields in template`);
   
-  // Fill fields
+  let filledCount = 0;
+  let processedCount = 0;
+  
+  // Fill fields with timeout protection
+  const startTime = Date.now();
+  const MAX_PROCESSING_TIME = 30000; // 30 seconds max
+  
   for (const field of allFields) {
+    // Check timeout
+    if (Date.now() - startTime > MAX_PROCESSING_TIME) {
+      throw new Error(`PDF processing timeout after ${MAX_PROCESSING_TIME}ms`);
+    }
+    
+    processedCount++;
     const fieldName = field.getName();
     const fieldType = field.constructor.name;
     const value = fields[fieldName];
     
-    if (value == null || value === '') continue;
+    if (value == null || value === '') {
+      if (processedCount % 20 === 0) {
+        console.log(`   Processed ${processedCount}/${allFields.length} fields...`);
+      }
+      continue;
+    }
     
     try {
       if (fieldType.includes('TextField')) {
-        // Text field: set text first, then update appearance with font
+        // Text field: simplified approach
         const textValue = String(value);
         
-        // Set text first
+        // Set font first if available
+        if (customFont) {
+          try {
+            field.updateAppearances(customFont);
+          } catch (fontError) {
+            console.warn(`⚠️ Font update failed for "${fieldName}": ${fontError.message}`);
+          }
+        }
+        
+        // Set text
         try {
           field.setText(textValue);
+          filledCount++;
         } catch (textError) {
-          // If setText fails (e.g., WinAnsi error), try with font first
           if (textError.message && textError.message.includes('WinAnsi')) {
-            console.warn(`⚠️ WinAnsi error on "${fieldName}", setting font first...`);
+            console.warn(`⚠️ WinAnsi error on "${fieldName}" - skipping font update`);
+            // Try without font update
             if (customFont) {
-              field.updateAppearances(customFont);
-              field.setText(textValue); // Retry with font set
-            } else {
-              throw textError;
+              try {
+                field.updateAppearances(); // No font parameter
+                field.setText(textValue);
+                filledCount++;
+              } catch (retryError) {
+                console.warn(`⚠️ Retry failed for "${fieldName}": ${retryError.message}`);
+              }
             }
           } else {
             throw textError;
           }
         }
-        
-        // Always update appearance with custom font AFTER setting text
-        // This ensures the appearance stream uses the correct font
-        if (customFont) {
-          try {
-            field.updateAppearances(customFont);
-          } catch (fontError) {
-            console.warn(`⚠️ Failed to update appearance for "${fieldName}": ${fontError.message}`);
-          }
-        }
-        
-        filledCount++;
         
       } else if (fieldType.includes('CheckBox')) {
         // Checkbox: check/uncheck then update appearance (no font - uses ZapfDingbats)
@@ -282,13 +306,26 @@ app.post('/fill', async (req, res) => {
     });
     console.log('✅ Template downloaded');
     
-    // 2. Load font
+    // 2. Load font (with fallback)
     const pdfDoc = await PDFDocument.load(fs.readFileSync(templatePath));
-    const customFont = await loadJapaneseFont(pdfDoc);
+    let customFont = null;
     
-    // 3. Fill PDF
+    try {
+      customFont = await loadJapaneseFont(pdfDoc);
+    } catch (fontError) {
+      console.warn(`⚠️ Font loading failed: ${fontError.message}`);
+      console.warn(`   Continuing without custom font (may cause WinAnsi errors)`);
+    }
+    
+    // 3. Fill PDF with timeout
     console.log(`📝 Filling PDF with ${Object.keys(fields).length} fields...`);
-    await fillPdf(templatePath, outputPath, fields, customFont);
+    
+    const fillPromise = fillPdf(templatePath, outputPath, fields, customFont);
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('PDF fill timeout after 60 seconds')), 60000);
+    });
+    
+    await Promise.race([fillPromise, timeoutPromise]);
     
     // 4. Upload to Drive
     const finalName = outputName || `filled_${Date.now()}.pdf`;
