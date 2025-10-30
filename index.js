@@ -130,10 +130,28 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
         console.log(`🔧 Running: ${pdftkFill}`);
         const { stderr: pdftkErr1 } = await execAsync(pdftkFill);
         if (pdftkErr1) console.warn(`⚠️ PDFtk stderr: ${pdftkErr1}`);
+        // Step 1: write NeedAppearances flag
         const pdftkNeedApp = `pdftk "${filledPath}" output "${outputPath}" need_appearances`;
         console.log(`🔧 Running: ${pdftkNeedApp}`);
         const { stderr: pdftkErr2 } = await execAsync(pdftkNeedApp);
         if (pdftkErr2) console.warn(`⚠️ PDFtk stderr: ${pdftkErr2}`);
+        // Step 2: strip existing AP appearances using qpdf (uncompress → regex remove → recompress)
+        try {
+          const qdfPath = path.join(TMP, `qdf_${Date.now()}.pdf`);
+          const qpdfUn = `qpdf --stream-data=uncompress --qdf "${outputPath}" "${qdfPath}"`;
+          console.log(`🔧 Running: ${qpdfUn}`);
+          await execAsync(qpdfUn);
+          let txt = fs.readFileSync(qdfPath, 'utf8');
+          // Remove /AP << ... >> blocks (non-greedy across lines)
+          txt = txt.replace(/\/AP\s*<<[\s\S]*?>>/g, '');
+          fs.writeFileSync(qdfPath, txt, 'utf8');
+          const qpdfRe = `qpdf --object-streams=generate --compress-streams=y "${qdfPath}" "${outputPath}"`;
+          console.log(`🔧 Running: ${qpdfRe}`);
+          await execAsync(qpdfRe);
+          try { fs.unlinkSync(qdfPath); } catch (_) {}
+        } catch (apErr) {
+          console.warn(`⚠️ AP strip skipped: ${apErr.message}`);
+        }
         try { if (fs.existsSync(filledPath)) fs.unlinkSync(filledPath); } catch (_) {}
       } else {
         const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}" flatten drop_xfa`;
