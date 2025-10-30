@@ -247,26 +247,58 @@ app.post('/fill', async (req, res) => {
   const outputPath = path.join(TMP, `output_${Date.now()}.pdf`);
   
   try {
-    // 1. Download template
-    console.log(`📥 Downloading template: ${templateFileId}`);
-    const templateFile = await drive.files.get(
-      { fileId: templateFileId, alt: 'media' },
-      { responseType: 'stream' }
-    );
-    
-    const writeStream = fs.createWriteStream(templatePath);
-    templateFile.data.pipe(writeStream);
-    
-    await new Promise((resolve, reject) => {
-      writeStream.on('finish', resolve);
-      writeStream.on('error', reject);
+    // 0. Inspect template metadata
+    const meta = await drive.files.get({
+      fileId: templateFileId,
+      fields: 'id, name, mimeType, size, owners(emailAddress)',
+      supportsAllDrives: true,
     });
+    console.log(`📄 Template meta: name=${meta.data.name} mime=${meta.data.mimeType} size=${meta.data.size}`);
+
+    // 1. Download template (export if it's a Google Doc)
+    console.log(`📥 Downloading template: ${templateFileId}`);
+    if (meta.data.mimeType && meta.data.mimeType.startsWith('application/vnd.google-apps')) {
+      // Not a binary PDF on Drive → export as PDF
+      const exportRes = await drive.files.export(
+        { fileId: templateFileId, mimeType: 'application/pdf' },
+        { responseType: 'stream' }
+      );
+      const writeStream = fs.createWriteStream(templatePath);
+      exportRes.data.pipe(writeStream);
+      await new Promise((resolve, reject) => {
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+      });
+    } else {
+      const templateFile = await drive.files.get(
+        { fileId: templateFileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'stream' }
+      );
+      const writeStream = fs.createWriteStream(templatePath);
+      templateFile.data.pipe(writeStream);
+      await new Promise((resolve, reject) => {
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+      });
+    }
     console.log('✅ Template downloaded');
     
-    // 2. Fill PDF with PDFtk
-    console.log(`📝 Filling PDF with ${Object.keys(fields).length} fields...`);
-    const flatten = String(mode || 'final').toLowerCase() !== 'preview';
-    await fillPdfWithPDFtk(templatePath, outputPath, fields, { flatten });
+    const modeStr = String(mode || 'final').toLowerCase();
+    if (modeStr === 'copy') {
+      // Just pass-through the template to output (sanity check)
+      console.log('🧪 COPY mode: uploading template as-is');
+      fs.copyFileSync(templatePath, outputPath);
+    } else if (modeStr === 'pdftk-copy') {
+      // Rewrite via pdftk without filling (checks pdftk write path)
+      const cmd = `pdftk "${templatePath}" cat output "${outputPath}"`;
+      console.log(`🔧 Running: ${cmd}`);
+      await execAsync(cmd);
+    } else {
+      // 2. Fill PDF with PDFtk
+      console.log(`📝 Filling PDF with ${Object.keys(fields).length} fields...`);
+      const flatten = modeStr !== 'preview';
+      await fillPdfWithPDFtk(templatePath, outputPath, fields, { flatten });
+    }
     
     // 3. Upload to Drive
     const finalName = outputName || `filled_${Date.now()}.pdf`;
