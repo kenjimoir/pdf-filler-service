@@ -162,9 +162,32 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
 
 // Upload to Google Drive
 async function uploadToDrive(drive, filePath, fileName, folderId) {
+  // If folderId is provided, verify it exists and is accessible
+  const finalFolderId = folderId || OUTPUT_FOLDER_ID;
+  if (finalFolderId) {
+    try {
+      await drive.files.get({
+        fileId: finalFolderId,
+        fields: 'id, name, mimeType',
+        supportsAllDrives: true,
+      });
+      console.log(`✅ Verified folder exists: ${finalFolderId}`);
+    } catch (error) {
+      if (error.code === 404) {
+        throw new Error(`Folder not found: ${finalFolderId}. Please check:\n1. Folder ID is correct\n2. Folder is shared with service account\n3. If in Shared Drive, service account has access`);
+      } else if (error.code === 403) {
+        throw new Error(`Access denied to folder: ${finalFolderId}. Please share the folder with your service account email.`);
+      }
+      throw error;
+    }
+  }
+  
+  // Use the verified folderId (already set above as finalFolderId)
+  const parents = finalFolderId ? [finalFolderId] : [];
+  
   const fileMetadata = {
     name: fileName,
-    parents: folderId ? [folderId] : [],
+    parents: parents.length > 0 ? parents : undefined,
   };
   
   const media = {
@@ -173,9 +196,10 @@ async function uploadToDrive(drive, filePath, fileName, folderId) {
   };
   
   const file = await drive.files.create({
-    resource: fileMetadata,
+    requestBody: fileMetadata, // Use requestBody (matches old service format)
     media: media,
     fields: 'id, name, webViewLink, webContentLink',
+    supportsAllDrives: true, // Support Shared Drives
   });
   
   return file.data;
