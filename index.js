@@ -210,10 +210,10 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
     try {
       const acroForm = pdfDoc.catalog.get(PDFName.of('AcroForm'));
       if (acroForm) {
-        // Get the actual font reference name from the embedded font
-        // The font reference is typically F0, F1, etc. based on order of embedding
-        const fontRef = customFont.ref || 'F0'; // Fallback to F0 if ref not available
-        const daString = `/${fontRef} 12 Tf 0 g`; // Font reference, size 12, color black
+        // Get the font reference from the embedded font using context.register
+        const fontRef = pdfDoc.context.register(customFont);
+        // Set default appearance: /FontName FontSize Tf Color
+        const daString = `/${fontRef} 12 Tf 0 g`;
         acroForm.set(PDFName.of('DA'), PDFString.of(daString));
         console.log(`✅ Set AcroForm default appearance to use custom font: ${daString}`);
       }
