@@ -107,7 +107,10 @@ function generateFDF(fields) {
 
 // Fill PDF using PDFtk, then flatten with Ghostscript to avoid checkbox/font blob issues
 async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
-  const options = Object.assign({ flatten: true, flattenMethod: 'gs' }, opts);
+  const options = Object.assign({ flatten: true, flattenMethod: 'pdftk' }, opts);
+  if (String(options.flattenMethod || '').toLowerCase() === 'none') {
+    options.flatten = false;
+  }
   console.log(`📝 Filling PDF with PDFtk...`);
   console.log(`   Template: ${templatePath}`);
   console.log(`   Output: ${outputPath}`);
@@ -312,7 +315,7 @@ app.post('/fill', async (req, res) => {
       // 2. Fill PDF with PDFtk
       console.log(`📝 Filling PDF with ${Object.keys(fields).length} fields...`);
       const flatten = modeStr !== 'preview';
-      const fm = String(flattenMethod || 'gs').toLowerCase();
+      const fm = String(flattenMethod || 'pdftk').toLowerCase();
       await fillPdfWithPDFtk(templatePath, outputPath, fields, { flatten, flattenMethod: fm });
     }
     
