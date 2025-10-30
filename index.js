@@ -123,12 +123,24 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
   
   try {
     if (!options.flatten || options.flattenMethod === 'pdftk') {
-      // Single-step pdftk (optionally flatten)
-      const flattenPart = options.flatten ? ' flatten drop_xfa' : '';
-      const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}"${flattenPart}`;
-      console.log(`🔧 Running: ${pdftkCmd}`);
-      const { stderr: pdftkErr } = await execAsync(pdftkCmd);
-      if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
+      // Single-step pdftk (optionally flatten). If not flattening, also set NeedAppearances.
+      if (!options.flatten) {
+        const filledPath = path.join(TMP, `filled_${Date.now()}.pdf`);
+        const pdftkFill = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${filledPath}"`;
+        console.log(`🔧 Running: ${pdftkFill}`);
+        const { stderr: pdftkErr1 } = await execAsync(pdftkFill);
+        if (pdftkErr1) console.warn(`⚠️ PDFtk stderr: ${pdftkErr1}`);
+        const pdftkNeedApp = `pdftk "${filledPath}" output "${outputPath}" need_appearances`;
+        console.log(`🔧 Running: ${pdftkNeedApp}`);
+        const { stderr: pdftkErr2 } = await execAsync(pdftkNeedApp);
+        if (pdftkErr2) console.warn(`⚠️ PDFtk stderr: ${pdftkErr2}`);
+        try { if (fs.existsSync(filledPath)) fs.unlinkSync(filledPath); } catch (_) {}
+      } else {
+        const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}" flatten drop_xfa`;
+        console.log(`🔧 Running: ${pdftkCmd}`);
+        const { stderr: pdftkErr } = await execAsync(pdftkCmd);
+        if (pdftkErr) console.warn(`⚠️ PDFtk stderr: ${pdftkErr}`);
+      }
     } else {
       // Two-step: pdftk fill (no flatten) → Ghostscript flatten
       const filledPath = path.join(TMP, `filled_${Date.now()}.pdf`);
