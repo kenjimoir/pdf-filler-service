@@ -50,24 +50,48 @@ function getDriveClient() {
 }
 
 // Generate FDF (Form Data Format) content from fields
+// Text is encoded as UTF-16BE hex so Japanese renders correctly
+// Checkbox/radio values use name objects (/Yes or /Off) and also set /AS
 function generateFDF(fields) {
+  const toUtf16Hex = (s) => {
+    const str = String(s);
+    // Build UTF-16BE buffer with BOM FE FF
+    const be = Buffer.alloc(2 + str.length * 2);
+    be[0] = 0xFE; be[1] = 0xFF;
+    for (let i = 0; i < str.length; i++) {
+      const code = str.charCodeAt(i);
+      be[2 + i * 2] = (code >> 8) & 0xFF;
+      be[3 + i * 2] = code & 0xFF;
+    }
+    return '<' + be.toString('hex').toUpperCase() + '>';
+  };
+
   let fdf = '%FDF-1.2\n';
   fdf += '1 0 obj\n';
   fdf += '<<\n';
   fdf += '/FDF\n';
   fdf += '<<\n';
   fdf += '/Fields [\n';
-  
-  // Add each field to FDF
-  for (const [fieldName, value] of Object.entries(fields)) {
-    if (value != null && value !== '') {
-      fdf += '<<\n';
-      fdf += `/T (${fieldName})\n`;
-      fdf += `/V (${String(value).replace(/[()\\]/g, '\\$&')})\n`; // Escape special characters
-      fdf += '>>\n';
+
+  for (const [rawName, rawVal] of Object.entries(fields)) {
+    if (rawVal == null || rawVal === '') continue;
+    const fieldName = String(rawName).replace(/[()\\]/g, '\\$&');
+    const val = String(rawVal);
+    const isOn = /^(on|yes|true)$/i.test(val);
+    const isOff = /^(off|no|false)$/i.test(val);
+
+    fdf += '<<\n';
+    fdf += `/T (${fieldName})\n`;
+    if (isOn || isOff) {
+      const name = isOn ? 'Yes' : 'Off';
+      fdf += `/V /${name}\n`;
+      fdf += `/AS /${name}\n`;
+    } else {
+      fdf += `/V ${toUtf16Hex(val)}\n`;
     }
+    fdf += '>>\n';
   }
-  
+
   fdf += ']\n';
   fdf += '>>\n';
   fdf += '>>\n';
@@ -77,7 +101,7 @@ function generateFDF(fields) {
   fdf += '/Root 1 0 R\n';
   fdf += '>>\n';
   fdf += '%%EOF\n';
-  
+
   return fdf;
 }
 
