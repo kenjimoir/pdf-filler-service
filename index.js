@@ -83,6 +83,7 @@ async function loadJapaneseFont(pdfDoc) {
   const customFont = await pdfDoc.embedFont(fontBytes);
   
   console.log(`✅ Loaded Japanese font from: ${fontPath}`);
+  console.log(`   Font object: ${customFont ? 'valid' : 'invalid'}`);
   return customFont;
 }
 
@@ -106,11 +107,37 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
     
     try {
       if (fieldType.includes('TextField')) {
-        // Text field: set text then update appearance with custom font
-        field.setText(String(value));
-        if (customFont) {
-          field.updateAppearances(customFont);
+        // Text field: set text first, then update appearance with font
+        const textValue = String(value);
+        
+        // Set text first
+        try {
+          field.setText(textValue);
+        } catch (textError) {
+          // If setText fails (e.g., WinAnsi error), try with font first
+          if (textError.message && textError.message.includes('WinAnsi')) {
+            console.warn(`⚠️ WinAnsi error on "${fieldName}", setting font first...`);
+            if (customFont) {
+              field.updateAppearances(customFont);
+              field.setText(textValue); // Retry with font set
+            } else {
+              throw textError;
+            }
+          } else {
+            throw textError;
+          }
         }
+        
+        // Always update appearance with custom font AFTER setting text
+        // This ensures the appearance stream uses the correct font
+        if (customFont) {
+          try {
+            field.updateAppearances(customFont);
+          } catch (fontError) {
+            console.warn(`⚠️ Failed to update appearance for "${fieldName}": ${fontError.message}`);
+          }
+        }
+        
         filledCount++;
         
       } else if (fieldType.includes('CheckBox')) {
@@ -147,9 +174,14 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
     }
   }
   
+  // NOTE: We're relying on manual updateAppearances() calls above
+  // Setting AcroForm DA might interfere with checkbox rendering
+  // So we skip it and trust that updateAppearances(customFont) worked for text fields
+  
   // Save with updateFieldAppearances: false to preserve our manual appearances
+  // The DA we set above will be used if any fields need default font
   const pdfBytes = await pdfDoc.save({
-    updateFieldAppearances: false,  // CRITICAL: Don't recalculate - use our manual updates
+    updateFieldAppearances: false,  // Don't recalculate - use our manual updates
     useObjectStreams: false,
     addDefaultPage: false,
   });
