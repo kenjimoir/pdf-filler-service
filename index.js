@@ -210,11 +210,12 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
     try {
       const acroForm = pdfDoc.catalog.get(PDFName.of('AcroForm'));
       if (acroForm) {
-        // Set DA to use the custom font (fonts are typically F0, F1, etc.)
-        // We'll use F0 as the default font reference
-        const daString = '/F0 12 Tf 0 g'; // Font F0, size 12, color black
+        // Get the actual font reference name from the embedded font
+        // The font reference is typically F0, F1, etc. based on order of embedding
+        const fontRef = customFont.ref || 'F0'; // Fallback to F0 if ref not available
+        const daString = `/${fontRef} 12 Tf 0 g`; // Font reference, size 12, color black
         acroForm.set(PDFName.of('DA'), PDFString.of(daString));
-        console.log('✅ Set AcroForm default appearance to use custom font');
+        console.log(`✅ Set AcroForm default appearance to use custom font: ${daString}`);
       }
     } catch (daError) {
       console.warn(`⚠️ Failed to set AcroForm DA: ${daError.message}`);
@@ -222,7 +223,7 @@ async function fillPdf(srcPath, outPath, fields, customFont) {
   }
   
   // Save with updateFieldAppearances: true to generate appearance streams
-  // This ensures text fields are visually displayed without clicking
+  // The AcroForm DA should ensure it uses our custom font
   const pdfBytes = await pdfDoc.save({
     updateFieldAppearances: true,  // Generate appearance streams for visual display
     useObjectStreams: false,
