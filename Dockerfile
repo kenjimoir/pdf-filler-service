@@ -7,9 +7,10 @@ RUN apt-get update && apt-get install -y pdftk ghostscript qpdf openjdk-17-jdk c
 RUN mkdir -p /opt && \
     curl -L -o /opt/pdfbox-app.jar https://repo1.maven.org/maven2/org/apache/pdfbox/pdfbox-app/2.0.29/pdfbox-app-2.0.29.jar
 
-# Fetch iText (single all-in-one) for appearance regeneration (editable forms)
+# Fetch iText 7 modules required (kernel + forms)
 RUN mkdir -p /opt/itext && \
-    curl -L -o /opt/itext/itext7-core.jar https://repo1.maven.org/maven2/com/itextpdf/itext7-core/7.2.5/itext7-core-7.2.5.jar
+    curl -L -o /opt/itext/kernel.jar https://repo1.maven.org/maven2/com/itextpdf/kernel/7.2.5/kernel-7.2.5.jar && \
+    curl -L -o /opt/itext/forms.jar  https://repo1.maven.org/maven2/com/itextpdf/forms/7.2.5/forms-7.2.5.jar
 
 # Set working directory
 WORKDIR /app
@@ -25,7 +26,7 @@ COPY . .
 
 # Compile the small appearance refresh helpers (fail build if compile fails)
 RUN javac -cp /opt/pdfbox-app.jar -d /opt /app/RefreshAppearances.java && \
-    javac -cp /opt/itext/itext7-core.jar -d /opt /app/RefreshAppearancesIText.java
+    javac -cp /opt/itext/kernel.jar:/opt/itext/forms.jar -d /opt /app/RefreshAppearancesIText.java
 
 # Expose port
 EXPOSE 8080
