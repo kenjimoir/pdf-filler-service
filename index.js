@@ -188,24 +188,20 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
         console.log(`🔧 Running: ${pdftkFill}`);
         const { stderr: pdftkErr1 } = await execAsync(pdftkFill);
         if (pdftkErr1) console.warn(`⚠️ PDFtk stderr: ${pdftkErr1}`);
-        // Step 1: write NeedAppearances flag
-        const pdftkNeedApp = `pdftk "${filledPath}" output "${outputPath}" need_appearances`;
-        console.log(`🔧 Running: ${pdftkNeedApp}`);
-        const { stderr: pdftkErr2 } = await execAsync(pdftkNeedApp);
-        if (pdftkErr2) console.warn(`⚠️ PDFtk stderr: ${pdftkErr2}`);
-        // Post-process: refresh appearances using PDFBox (keeps form editable)
+        // Post-process: refresh appearances using iText (keeps form editable, no NeedAppearances)
         try {
           const refreshedPath = path.join(TMP, `refreshed_${Date.now()}.pdf`);
-          const refreshCmd = `java -cp /opt/pdfbox-app.jar:/opt:/app RefreshAppearances "${outputPath}" "${refreshedPath}"`;
+          const refreshCmd = `java -cp /opt/itext/itext-kernel.jar:/opt/itext/itext-forms.jar:/opt/itext/commons-io.jar:/opt:/app RefreshAppearancesIText "${filledPath}" "${refreshedPath}"`;
           console.log(`🔧 Running: ${refreshCmd}`);
           const { stderr: refErr } = await execAsync(refreshCmd);
-          if (refErr) console.warn(`⚠️ PDFBox refresh stderr: ${refErr}`);
+          if (refErr) console.warn(`⚠️ iText refresh stderr: ${refErr}`);
           fs.copyFileSync(refreshedPath, outputPath);
           try { fs.unlinkSync(refreshedPath); } catch(_) {}
         } catch (e) {
           console.warn(`⚠️ Appearance refresh failed: ${e.message}`);
+          // Fallback to copying filled file if refresh fails
+          fs.copyFileSync(filledPath, outputPath);
         }
-        // SKIP: No qpdf appearance stripping (this preserves checkboxes)
         try { if (fs.existsSync(filledPath)) fs.unlinkSync(filledPath); } catch (_) {}
       } else {
         const pdftkCmd = `pdftk "${templatePath}" fill_form "${fdfPath}" output "${outputPath}" flatten drop_xfa`;
