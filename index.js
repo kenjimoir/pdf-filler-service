@@ -191,7 +191,7 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
         // Post-process: refresh appearances using iText (keeps form editable, no NeedAppearances)
         try {
           const refreshedPath = path.join(TMP, `refreshed_${Date.now()}.pdf`);
-          const refreshCmd = `java -cp /opt/itext/itext-kernel.jar:/opt/itext/itext-forms.jar:/opt/itext/commons-io.jar:/opt:/app RefreshAppearancesIText "${filledPath}" "${refreshedPath}"`;
+          const refreshCmd = `java -cp /opt/itext/itext7-core.jar:/opt:/app RefreshAppearancesIText "${filledPath}" "${refreshedPath}"`;
           console.log(`🔧 Running: ${refreshCmd}`);
           const { stderr: refErr } = await execAsync(refreshCmd);
           if (refErr) console.warn(`⚠️ iText refresh stderr: ${refErr}`);
