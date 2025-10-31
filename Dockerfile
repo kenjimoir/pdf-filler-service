@@ -19,8 +19,8 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Compile the small appearance refresh helper
-RUN javac -cp /opt/pdfbox-app.jar -d /opt RefreshAppearances.java || true
+# Compile the small appearance refresh helper (fail build if compile fails)
+RUN javac -cp /opt/pdfbox-app.jar -d /opt /app/RefreshAppearances.java
 
 # Expose port
 EXPOSE 8080
