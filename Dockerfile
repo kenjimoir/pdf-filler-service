@@ -25,8 +25,12 @@ RUN npm install
 COPY . .
 
 # Compile the small appearance refresh helpers (fail build if compile fails)
-RUN javac -cp /opt/pdfbox-app.jar -d /opt /app/RefreshAppearances.java && \
-    javac -cp /opt/itext/kernel.jar:/opt/itext/forms.jar -d /opt /app/RefreshAppearancesIText.java
+RUN SRC1=/app/RefreshAppearances.java; SRC2=/app/pdf-filler-pdftk/RefreshAppearances.java; \
+    SRC="$SRC1"; if [ ! -f "$SRC" ]; then SRC="$SRC2"; fi; \
+    javac -cp /opt/pdfbox-app.jar -d /opt "$SRC" && \
+    SRC3=/app/RefreshAppearancesIText.java; SRC4=/app/pdf-filler-pdftk/RefreshAppearancesIText.java; \
+    SRCI="$SRC3"; if [ ! -f "$SRCI" ]; then SRCI="$SRC4"; fi; \
+    javac -cp /opt/itext/kernel.jar:/opt/itext/forms.jar -d /opt "$SRCI"
 
 # Expose port
 EXPOSE 8080
