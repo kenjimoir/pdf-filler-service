@@ -196,7 +196,7 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
         // Post-process: refresh appearances using PDFBox (keeps form editable)
         try {
           const refreshedPath = path.join(TMP, `refreshed_${Date.now()}.pdf`);
-          const refreshCmd = `java -cp /opt/pdfbox-app.jar:/opt RefreshAppearances "${outputPath}" "${refreshedPath}"`;
+          const refreshCmd = `java -cp /opt/pdfbox-app.jar:/opt:/app RefreshAppearances "${outputPath}" "${refreshedPath}"`;
           console.log(`🔧 Running: ${refreshCmd}`);
           const { stderr: refErr } = await execAsync(refreshCmd);
           if (refErr) console.warn(`⚠️ PDFBox refresh stderr: ${refErr}`);
