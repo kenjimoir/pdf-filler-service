@@ -33,9 +33,17 @@ public class RefreshAppearances {
         List<PDField> kids = ((PDNonTerminalField) field).getChildren();
         if (kids != null) for (PDField k : kids) refreshField(k);
       } else if (field instanceof PDRadioButton) {
-        field.constructAppearances();
+        PDRadioButton rb = (PDRadioButton) field;
+        String v = rb.getValue();
+        if (v != null) rb.setValue(v); // re-apply same value to rebuild /AP
       } else if (field instanceof PDCheckBox) {
-        field.constructAppearances();
+        PDCheckBox cb = (PDCheckBox) field;
+        String v = cb.getValue();
+        if (v == null || v.equalsIgnoreCase("Off")) {
+          cb.unCheck();
+        } else {
+          cb.setValue(v); // e.g., "Yes" or custom on-value
+        }
       } // skip text fields etc.
     } catch (Exception ignore) {
       // keep going even if a particular field fails
