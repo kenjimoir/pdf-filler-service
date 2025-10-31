@@ -78,17 +78,30 @@ function generateFDF(fields, onNameMap) {
     if (rawVal == null || rawVal === '') continue;
     const fieldName = String(rawName).replace(/[()\\]/g, '\\$&');
     const val = String(rawVal);
-    const isOn = /^(on|yes|true|1)$/i.test(val);
-    const isOff = /^(off|no|false)$/i.test(val);
+    
+    // Check if it's a checkbox (on/off)
+    const isCheckboxOn = /^(on|true|1)$/i.test(val);
+    const isCheckboxOff = /^(off|false|0)$/i.test(val);
+    
+    // Check if it's a radio button export value (yes/no or other specific values)
+    // Radio buttons should use the export value directly as a name object
+    const isRadioValue = /^(yes|no|male|female|home|workplace|mobilephone|asia|europe|oceania|northamerica|hawaii|guam\/saipan|southamerica|africa|middleeast|other|days|months|\d+)$/i.test(val);
 
     fdf += '<<\n';
     fdf += `/T (${fieldName})\n`;
-    if (isOn || isOff) {
+    
+    if (isCheckboxOn || isCheckboxOff) {
+      // Checkbox: use /Yes or /Off (with detected on-name if available)
       const detectedOn = onNameMap && onNameMap[fieldName] ? onNameMap[fieldName] : 'Yes';
-      const name = isOn ? detectedOn : 'Off';
+      const name = isCheckboxOn ? detectedOn : 'Off';
       fdf += `/V /${name}\n`;
       fdf += `/AS /${name}\n`;
+    } else if (isRadioValue) {
+      // Radio button: use export value directly as a name object (case-sensitive!)
+      fdf += `/V /${val}\n`;
+      fdf += `/AS /${val}\n`;
     } else {
+      // Text field: use UTF-16BE hex encoding
       fdf += `/V ${toUtf16Hex(val)}\n`;
     }
     fdf += '>>\n';
