@@ -193,6 +193,18 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
         console.log(`🔧 Running: ${pdftkNeedApp}`);
         const { stderr: pdftkErr2 } = await execAsync(pdftkNeedApp);
         if (pdftkErr2) console.warn(`⚠️ PDFtk stderr: ${pdftkErr2}`);
+        // Post-process: refresh appearances using PDFBox (keeps form editable)
+        try {
+          const refreshedPath = path.join(TMP, `refreshed_${Date.now()}.pdf`);
+          const refreshCmd = `java -cp /opt/pdfbox-app.jar:/opt RefreshAppearances "${outputPath}" "${refreshedPath}"`;
+          console.log(`🔧 Running: ${refreshCmd}`);
+          const { stderr: refErr } = await execAsync(refreshCmd);
+          if (refErr) console.warn(`⚠️ PDFBox refresh stderr: ${refErr}`);
+          fs.copyFileSync(refreshedPath, outputPath);
+          try { fs.unlinkSync(refreshedPath); } catch(_) {}
+        } catch (e) {
+          console.warn(`⚠️ Appearance refresh failed: ${e.message}`);
+        }
         // SKIP: No qpdf appearance stripping (this preserves checkboxes)
         try { if (fs.existsSync(filledPath)) fs.unlinkSync(filledPath); } catch (_) {}
       } else {
