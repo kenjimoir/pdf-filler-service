@@ -191,9 +191,19 @@ async function fillPdfWithPDFtk(templatePath, outputPath, fields, opts) {
         // Post-process: refresh appearances using iText (keeps form editable, no NeedAppearances)
         try {
           const refreshedPath = path.join(TMP, `refreshed_${Date.now()}.pdf`);
-          const refreshCmd = `java -cp /opt/itext/kernel.jar:/opt/itext/forms.jar:/opt:/app RefreshAppearancesIText "${filledPath}" "${refreshedPath}"`;
+          // Try both class names (file might be RefreshAppearancesText or RefreshAppearancesIText)
+          let refreshCmd = `java -cp /opt/itext/kernel.jar:/opt/itext/forms.jar:/opt RefreshAppearancesIText "${filledPath}" "${refreshedPath}"`;
           console.log(`🔧 Running: ${refreshCmd}`);
-          const { stderr: refErr } = await execAsync(refreshCmd);
+          let refErr = '';
+          try {
+            const result = await execAsync(refreshCmd);
+            refErr = result.stderr || '';
+          } catch (e1) {
+            refreshCmd = `java -cp /opt/itext/kernel.jar:/opt/itext/forms.jar:/opt RefreshAppearancesText "${filledPath}" "${refreshedPath}"`;
+            console.log(`🔧 Retrying with: ${refreshCmd}`);
+            const result = await execAsync(refreshCmd);
+            refErr = result.stderr || '';
+          }
           if (refErr) console.warn(`⚠️ iText refresh stderr: ${refErr}`);
           fs.copyFileSync(refreshedPath, outputPath);
           try { fs.unlinkSync(refreshedPath); } catch(_) {}
