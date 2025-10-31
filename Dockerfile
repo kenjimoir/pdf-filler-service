@@ -25,9 +25,9 @@ RUN npm install
 COPY . .
 
 # Compile the small appearance refresh helpers (fail build if compile fails)
-RUN ls -la /app/*.java && \
-    javac -cp /opt/pdfbox-app.jar -d /opt /app/RefreshAppearances.java && \
-    javac -cp /opt/itext/kernel.jar:/opt/itext/forms.jar -d /opt /app/RefreshAppearancesIText.java
+RUN javac -cp /opt/pdfbox-app.jar -d /opt /app/RefreshAppearances.java && \
+    (javac -cp /opt/itext/kernel.jar:/opt/itext/forms.jar -d /opt /app/RefreshAppearancesIText.java 2>&1 || \
+     javac -cp /opt/itext/kernel.jar:/opt/itext/forms.jar -d /opt /app/RefreshAppearancesText.java)
 
 # Expose port
 EXPOSE 8080
