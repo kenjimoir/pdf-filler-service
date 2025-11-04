@@ -426,7 +426,7 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
     console.log('Uploading to Google Drive...');
     console.log(`Target folder ID: ${folderId}`);
     
-    // Verify folder exists before uploading
+    // Try to verify folder exists (optional - don't fail if verification fails)
     if (folderId) {
       try {
         const folderInfo = await drive.files.get({
@@ -435,8 +435,10 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
         });
         console.log(`Folder verified: ${folderInfo.data.name} (${folderInfo.data.mimeType})`);
       } catch (folderError) {
-        console.error(`Folder verification failed: ${folderError.message}`);
-        throw new Error(`Folder not found or no access: ${folderId}. Please ensure the service account has access to this folder.`);
+        console.warn(`Folder verification failed: ${folderError.message}`);
+        console.warn(`⚠ Continuing with upload anyway - folder may still be accessible for upload`);
+        // Don't throw - continue with upload attempt
+        // The upload itself will fail if folder is truly inaccessible
       }
     }
     
@@ -452,11 +454,20 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
       body: bufferStream,
     };
 
-    const uploadResponse = await drive.files.create({
-      requestBody: fileMetadata,
-      media: media,
-      fields: 'id, name, webViewLink',
-    });
+    let uploadResponse;
+    try {
+      uploadResponse = await drive.files.create({
+        requestBody: fileMetadata,
+        media: media,
+        fields: 'id, name, webViewLink',
+      });
+    } catch (uploadError) {
+      console.error(`Upload failed: ${uploadError.message}`);
+      if (uploadError.message && uploadError.message.includes('File not found')) {
+        throw new Error(`Folder not found or no access: ${folderId}. Please ensure the service account (${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'pdf-filler-sa@pdf-autofill-472800.iam.gserviceaccount.com'}) has "Editor" access to this folder.`);
+      }
+      throw uploadError;
+    }
 
     const uploadedFile = uploadResponse.data;
 
