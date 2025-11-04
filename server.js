@@ -139,21 +139,35 @@ async function setFieldValue(form, field, value, font, zapfFont) {
 
     if (fieldType === 'PDFCheckBox') {
       // Checkbox handling
-      const boolValue = value === true || value === 'true' || value === 'TRUE' || 
-                       value === 'on' || value === 'On' || value === 'ON' ||
-                       value === 'yes' || value === 'Yes' || value === 'YES' ||
-                       String(value).toLowerCase() === 'true';
+      // Check if value is falsy or explicitly 'off'
+      const shouldUncheck = value === false || value === 'false' || value === 'FALSE' ||
+                           value === 'off' || value === 'Off' || value === 'OFF' ||
+                           value === null || value === undefined || value === '';
       
-      if (boolValue) {
-        // Try to check with export value first
-        try {
-          field.check(value);
-        } catch (e) {
-          // Fallback to simple check()
-          field.check();
-        }
-      } else {
+      if (shouldUncheck) {
         field.uncheck();
+        console.log(`    Unchecked checkbox`);
+      } else {
+        // Value is truthy or a string (export value like "europe", "asia")
+        // Try to check with export value first (if it's a string)
+        try {
+          if (typeof value === 'string' && value.trim() !== '') {
+            field.check(value);
+            console.log(`    Checked checkbox with export value: "${value}"`);
+          } else {
+            // Boolean true or other truthy value
+            field.check();
+            console.log(`    Checked checkbox (default export value)`);
+          }
+        } catch (e) {
+          // Fallback to simple check() if export value doesn't match
+          try {
+            field.check();
+            console.log(`    Checked checkbox (fallback to default export value)`);
+          } catch (e2) {
+            console.warn(`    ⚠ Could not check checkbox: ${e2.message}`);
+          }
+        }
       }
       
       // Update appearance with ZapfDingbats
