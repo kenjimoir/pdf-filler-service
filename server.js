@@ -157,13 +157,16 @@ async function setFieldValue(form, field, value, font, zapfFont) {
       }
       
       // Update appearance with ZapfDingbats
+      // Note: StandardFonts.ZapfDingbats may not work with updateAppearances() directly
+      // Try to update, but don't throw if it fails - the value is still set correctly
       if (zapfFont) {
         try {
           await field.updateAppearances(zapfFont);
           console.log(`    ✓ Updated checkbox appearance with ZapfDingbats`);
         } catch (e) {
-          console.error(`    ✗ Failed to update checkbox appearance: ${e.message}`);
-          throw e;
+          console.warn(`    ⚠ Failed to update checkbox appearance with ZapfDingbats: ${e.message}`);
+          console.warn(`    ⚠ Checkbox value is set, but appearance may not be updated. This is a known limitation with StandardFonts.`);
+          // Don't throw - continue processing
         }
       } else {
         console.warn(`    ⚠ No ZapfDingbats font provided for checkbox`);
@@ -194,13 +197,16 @@ async function setFieldValue(form, field, value, font, zapfFont) {
       }
       
       // Update appearance with ZapfDingbats
+      // Note: StandardFonts.ZapfDingbats may not work with updateAppearances() directly
+      // Try to update, but don't throw if it fails - the value is still set correctly
       if (zapfFont) {
         try {
           await field.updateAppearances(zapfFont);
           console.log(`    ✓ Updated radio appearance with ZapfDingbats`);
         } catch (e) {
-          console.error(`    ✗ Failed to update radio appearance: ${e.message}`);
-          throw e;
+          console.warn(`    ⚠ Failed to update radio appearance with ZapfDingbats: ${e.message}`);
+          console.warn(`    ⚠ Radio value is set, but appearance may not be updated. This is a known limitation with StandardFonts.`);
+          // Don't throw - continue processing
         }
       } else {
         console.warn(`    ⚠ No ZapfDingbats font provided for radio`);
