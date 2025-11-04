@@ -405,15 +405,10 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
 
     console.log(`Fields summary: ${fieldsProcessed} processed, ${fieldsUpdated} updated, ${fieldsErrors} errors`);
 
-    // 5. Update all field appearances with CJK font as fallback
-    console.log('Updating all field appearances with CJK font as fallback...');
-    try {
-      await form.updateFieldAppearances(cjkFontEmbedded);
-      console.log('✓ Successfully updated all field appearances');
-    } catch (error) {
-      console.error(`✗ Error updating field appearances: ${error.message}`);
-      console.error(`Stack: ${error.stack}`);
-    }
+    // 5. Note: Individual field appearances have been updated with appropriate fonts
+    // We do NOT call form.updateFieldAppearances() here as it would overwrite
+    // the individually updated appearances with a single font (CJK), which would
+    // break the Latin font formatting and checkbox/radio button appearances.
 
     // 6. Save PDF (non-flattened, compatibility-focused)
     console.log('Saving PDF...');
