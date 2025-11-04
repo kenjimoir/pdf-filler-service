@@ -148,25 +148,43 @@ async function setFieldValue(form, field, value, font, zapfFont) {
         field.uncheck();
         console.log(`    Unchecked checkbox`);
       } else {
-        // Value is truthy or a string (export value like "europe", "asia")
-        // Try to check with export value first (if it's a string)
+        // Value is truthy or a string (export value like "europe", "asia", "on", "70")
+        // For checkboxes with export values like "europe", we need to check with the specific export value
+        // For checkboxes with "on"/"off", we can use simple check()
         try {
           if (typeof value === 'string' && value.trim() !== '') {
-            field.check(value);
-            console.log(`    Checked checkbox with export value: "${value}"`);
+            const stringValue = value.trim();
+            // First uncheck to ensure we start from a clean state
+            // (Important for fields with multiple checkboxes with same name)
+            try {
+              field.uncheck();
+            } catch (uncheckError) {
+              // Ignore uncheck errors - field might already be unchecked
+            }
+            
+            // Try to check with export value
+            // Note: For fields like DestinationRegion with multiple checkboxes,
+            // we need to check the specific checkbox with matching export value
+            try {
+              field.check(stringValue);
+              console.log(`    Checked checkbox with export value: "${stringValue}"`);
+            } catch (checkError) {
+              // If checking with export value fails, try checking without parameter
+              // This works for "on"/"off" style checkboxes
+              try {
+                field.check();
+                console.log(`    Checked checkbox (default export value, attempted "${stringValue}")`);
+              } catch (checkError2) {
+                console.warn(`    ⚠ Could not check checkbox with value "${stringValue}": ${checkError2.message}`);
+              }
+            }
           } else {
             // Boolean true or other truthy value
             field.check();
             console.log(`    Checked checkbox (default export value)`);
           }
         } catch (e) {
-          // Fallback to simple check() if export value doesn't match
-          try {
-            field.check();
-            console.log(`    Checked checkbox (fallback to default export value)`);
-          } catch (e2) {
-            console.warn(`    ⚠ Could not check checkbox: ${e2.message}`);
-          }
+          console.warn(`    ⚠ Error checking checkbox: ${e.message}`);
         }
       }
       
@@ -367,6 +385,13 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
         try {
           field = form.getCheckBox(fieldName);
           fieldType = 'PDFCheckBox';
+          // Debug: Log export value for checkboxes (if available)
+          try {
+            const exportValue = field.exportValue;
+            console.log(`    [DEBUG] Checkbox export value: ${exportValue}`);
+          } catch (e) {
+            // Ignore - export value might not be accessible
+          }
         } catch (e) {
           try {
             field = form.getRadioGroup(fieldName);
