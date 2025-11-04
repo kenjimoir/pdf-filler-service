@@ -1,0 +1,27 @@
+{
+  "name": "pdf-filler-service",
+  "version": "1.0.0",
+  "description": "PDF form filler service for insurance applications",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.0.0",
+    "dotenv": "^17.2.3",
+    "express": "^4.18.2",
+    "googleapis": "^126.0.1",
+    "pdf-lib": "^1.17.1"
+  },
+  "keywords": [
+    "pdf",
+    "form-filler",
+    "acroform"
+  ],
+  "author": "",
+  "license": "MIT"
+}
