@@ -251,6 +251,10 @@ async function setFieldValue(form, field, value, font, zapfFont) {
 
 // Main PDF fill endpoint
 app.post('/fill', authenticateBearerToken, async (req, res) => {
+  console.log('=== PDF Fill Request Received ===');
+  console.log('Request body keys:', Object.keys(req.body || {}));
+  console.log('Request headers:', JSON.stringify(req.headers));
+  
   try {
     // Support both formats: {templateId, output: {name, folderId}, fields}
     // and {templateFileId, outputName, folderId, fields} (from Code.gs)
@@ -408,8 +412,11 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
     console.log(`PDF uploaded successfully: ${uploadedFile.id}`);
 
     // 8. Return response
+    console.log('=== Sending Response ===');
+    console.log(`Fields processed: ${fieldsProcessed}, updated: ${fieldsUpdated}, errors: ${fieldsErrors}`);
     res.json({
       ok: true,
+      filledCount: fieldsUpdated, // デバッグ用: 実際に更新されたフィールド数
       file: {
         id: uploadedFile.id,
         name: uploadedFile.name,
@@ -422,15 +429,19 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
         webViewLink: uploadedFile.webViewLink,
       },
     });
+    console.log('=== Response Sent ===');
 
   } catch (error) {
-    console.error('Error processing PDF fill request:', error);
+    console.error('=== Error Processing PDF Fill Request ===');
+    console.error('Error:', error);
+    console.error('Stack:', error.stack);
     // Don't expose stack trace to client
     const errorMessage = error.message || 'Internal server error';
     res.status(500).json({ 
       ok: false, 
       error: errorMessage 
     });
+    console.error('=== Error Response Sent ===');
   }
 });
 
