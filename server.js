@@ -157,7 +157,15 @@ async function setFieldValue(form, field, value, font, zapfFont) {
       
       // Update appearance with ZapfDingbats
       if (zapfFont) {
-        await field.updateAppearances(zapfFont);
+        try {
+          await field.updateAppearances(zapfFont);
+          console.log(`    ✓ Updated checkbox appearance with ZapfDingbats`);
+        } catch (e) {
+          console.error(`    ✗ Failed to update checkbox appearance: ${e.message}`);
+          throw e;
+        }
+      } else {
+        console.warn(`    ⚠ No ZapfDingbats font provided for checkbox`);
       }
     } else if (fieldType === 'PDFRadioGroup') {
       // Radio button handling
@@ -182,16 +190,33 @@ async function setFieldValue(form, field, value, font, zapfFont) {
       
       // Update appearance with ZapfDingbats
       if (zapfFont) {
-        await field.updateAppearances(zapfFont);
+        try {
+          await field.updateAppearances(zapfFont);
+          console.log(`    ✓ Updated checkbox appearance with ZapfDingbats`);
+        } catch (e) {
+          console.error(`    ✗ Failed to update checkbox appearance: ${e.message}`);
+          throw e;
+        }
+      } else {
+        console.warn(`    ⚠ No ZapfDingbats font provided for checkbox`);
       }
     } else if (fieldType === 'PDFTextField') {
       // Text field handling
       const stringValue = String(value || '');
       field.setText(stringValue);
+      console.log(`    Set text value: "${stringValue.substring(0, 30)}"`);
       
       // Update appearance with provided font
       if (font) {
-        await field.updateAppearances(font);
+        try {
+          await field.updateAppearances(font);
+          console.log(`    ✓ Updated appearance with font`);
+        } catch (e) {
+          console.error(`    ✗ Failed to update appearance: ${e.message}`);
+          throw e;
+        }
+      } else {
+        console.warn(`    ⚠ No font provided for field`);
       }
     } else {
       // Other field types
@@ -200,18 +225,23 @@ async function setFieldValue(form, field, value, font, zapfFont) {
       try {
         if (typeof field.setText === 'function') {
           field.setText(stringValue);
+          console.log(`    Set text value: "${stringValue.substring(0, 30)}"`);
         }
       } catch (e) {
-        console.warn(`Could not set value for field "${field.getName()}"`);
+        console.warn(`Could not set value for field "${field.getName()}": ${e.message}`);
       }
       
       // Update appearance with provided font
       if (font) {
         try {
           await field.updateAppearances(font);
+          console.log(`    ✓ Updated appearance with font`);
         } catch (e) {
-          console.warn(`Could not update appearance for field "${field.getName()}"`);
+          console.error(`    ✗ Failed to update appearance: ${e.message}`);
+          throw e;
         }
+      } else {
+        console.warn(`    ⚠ No font provided for field`);
       }
     }
   } catch (error) {
@@ -289,6 +319,10 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
     console.log('Filling form fields...');
     const form = pdfDoc.getForm();
 
+    let fieldsProcessed = 0;
+    let fieldsUpdated = 0;
+    let fieldsErrors = 0;
+
     // Process each field
     for (const [fieldName, value] of Object.entries(fields)) {
       try {
@@ -298,6 +332,9 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
                      form.getDropdown(fieldName);
 
         if (field) {
+          fieldsProcessed++;
+          console.log(`Processing field: ${fieldName} (type: ${field.constructor.name}, value: ${String(value).substring(0, 50)})`);
+          
           // Determine font based on field type
           let font = cjkFontEmbedded;
           let zapfFont = null;
@@ -305,28 +342,40 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
           const fieldType = field.constructor.name;
           if (fieldType === 'PDFCheckBox' || fieldType === 'PDFRadioGroup') {
             zapfFont = zapfDingbatsFontEmbedded;
+            console.log(`  Using ZapfDingbats font for ${fieldType}`);
           } else if (fieldType === 'PDFTextField') {
             // Use Latin font if available and value doesn't contain CJK
             if (latinFontEmbedded && !containsCJK(String(value))) {
               font = latinFontEmbedded;
+              console.log(`  Using Latin font (no CJK detected)`);
+            } else {
+              console.log(`  Using CJK font`);
             }
           }
 
           await setFieldValue(form, field, value, font, zapfFont);
+          fieldsUpdated++;
+          console.log(`  ✓ Successfully updated field: ${fieldName}`);
         } else {
           console.warn(`Field not found: ${fieldName}`);
         }
       } catch (error) {
-        console.warn(`Error processing field "${fieldName}": ${error.message}`);
+        fieldsErrors++;
+        console.error(`Error processing field "${fieldName}": ${error.message}`);
+        console.error(`Stack: ${error.stack}`);
       }
     }
 
+    console.log(`Fields summary: ${fieldsProcessed} processed, ${fieldsUpdated} updated, ${fieldsErrors} errors`);
+
     // 5. Update all field appearances with CJK font as fallback
-    console.log('Updating all field appearances...');
+    console.log('Updating all field appearances with CJK font as fallback...');
     try {
       await form.updateFieldAppearances(cjkFontEmbedded);
+      console.log('✓ Successfully updated all field appearances');
     } catch (error) {
-      console.warn(`Error updating field appearances: ${error.message}`);
+      console.error(`✗ Error updating field appearances: ${error.message}`);
+      console.error(`Stack: ${error.stack}`);
     }
 
     // 6. Save PDF (non-flattened, compatibility-focused)
