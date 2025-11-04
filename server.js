@@ -174,16 +174,20 @@ async function setFieldValue(form, field, value, font, zapfFont) {
       if (stringValue) {
         try {
           field.select(stringValue);
+          console.log(`    Selected radio value: "${stringValue}"`);
         } catch (e) {
           // Try lowercase
           try {
             field.select(stringValue.toLowerCase());
+            console.log(`    Selected radio value (lowercase): "${stringValue.toLowerCase()}"`);
           } catch (e2) {
             // Try uppercase
             try {
               field.select(stringValue.toUpperCase());
+              console.log(`    Selected radio value (uppercase): "${stringValue.toUpperCase()}"`);
             } catch (e3) {
-              console.warn(`Could not set radio value "${stringValue}" for field "${field.getName()}"`);
+              console.warn(`    ⚠ Could not set radio value "${stringValue}" for field "${field.getName()}"`);
+              // Continue without throwing - field might not have this export value
             }
           }
         }
@@ -193,13 +197,13 @@ async function setFieldValue(form, field, value, font, zapfFont) {
       if (zapfFont) {
         try {
           await field.updateAppearances(zapfFont);
-          console.log(`    ✓ Updated checkbox appearance with ZapfDingbats`);
+          console.log(`    ✓ Updated radio appearance with ZapfDingbats`);
         } catch (e) {
-          console.error(`    ✗ Failed to update checkbox appearance: ${e.message}`);
+          console.error(`    ✗ Failed to update radio appearance: ${e.message}`);
           throw e;
         }
       } else {
-        console.warn(`    ⚠ No ZapfDingbats font provided for checkbox`);
+        console.warn(`    ⚠ No ZapfDingbats font provided for radio`);
       }
     } else if (fieldType === 'PDFTextField') {
       // Text field handling
@@ -331,24 +335,46 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
     // Process each field
     for (const [fieldName, value] of Object.entries(fields)) {
       try {
-        const field = form.getTextField(fieldName) || 
-                     form.getCheckBox(fieldName) || 
-                     form.getRadioGroup(fieldName) ||
-                     form.getDropdown(fieldName);
+        // Try to get field in order: CheckBox -> RadioGroup -> TextField -> Dropdown
+        // This order is important because getTextField() will throw error if field is actually a RadioGroup/CheckBox
+        let field = null;
+        let fieldType = null;
+        
+        try {
+          field = form.getCheckBox(fieldName);
+          fieldType = 'PDFCheckBox';
+        } catch (e) {
+          try {
+            field = form.getRadioGroup(fieldName);
+            fieldType = 'PDFRadioGroup';
+          } catch (e2) {
+            try {
+              field = form.getDropdown(fieldName);
+              fieldType = 'PDFDropdown';
+            } catch (e3) {
+              try {
+                field = form.getTextField(fieldName);
+                fieldType = 'PDFTextField';
+              } catch (e4) {
+                // Field not found or unknown type
+                field = null;
+              }
+            }
+          }
+        }
 
         if (field) {
           fieldsProcessed++;
-          console.log(`Processing field: ${fieldName} (type: ${field.constructor.name}, value: ${String(value).substring(0, 50)})`);
+          console.log(`Processing field: ${fieldName} (type: ${fieldType}, value: ${String(value).substring(0, 50)})`);
           
           // Determine font based on field type
           let font = cjkFontEmbedded;
           let zapfFont = null;
 
-          const fieldType = field.constructor.name;
           if (fieldType === 'PDFCheckBox' || fieldType === 'PDFRadioGroup') {
             zapfFont = zapfDingbatsFontEmbedded;
             console.log(`  Using ZapfDingbats font for ${fieldType}`);
-          } else if (fieldType === 'PDFTextField') {
+          } else if (fieldType === 'PDFTextField' || fieldType === 'PDFDropdown') {
             // Use Latin font if available and value doesn't contain CJK
             if (latinFontEmbedded && !containsCJK(String(value))) {
               font = latinFontEmbedded;
@@ -362,7 +388,7 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
           fieldsUpdated++;
           console.log(`  ✓ Successfully updated field: ${fieldName}`);
         } else {
-          console.warn(`Field not found: ${fieldName}`);
+          console.warn(`Field not found: ${fieldName} (skipping)`);
         }
       } catch (error) {
         fieldsErrors++;
@@ -392,6 +418,22 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
 
     // 7. Upload to Google Drive
     console.log('Uploading to Google Drive...');
+    console.log(`Target folder ID: ${folderId}`);
+    
+    // Verify folder exists before uploading
+    if (folderId) {
+      try {
+        const folderInfo = await drive.files.get({
+          fileId: folderId,
+          fields: 'id, name, mimeType',
+        });
+        console.log(`Folder verified: ${folderInfo.data.name} (${folderInfo.data.mimeType})`);
+      } catch (folderError) {
+        console.error(`Folder verification failed: ${folderError.message}`);
+        throw new Error(`Folder not found or no access: ${folderId}. Please ensure the service account has access to this folder.`);
+      }
+    }
+    
     const fileMetadata = {
       name: outputName,
       parents: folderId ? [folderId] : undefined,
