@@ -6,6 +6,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
+import { Readable } from 'stream';
 import dotenv from 'dotenv';
 
 // Load environment variables from .env file (for local development)
@@ -396,9 +397,11 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
       parents: folderId ? [folderId] : undefined,
     };
 
+    // Convert Buffer to stream for Google Drive API
+    const bufferStream = Readable.from(Buffer.from(pdfBytes));
     const media = {
       mimeType: 'application/pdf',
-      body: Buffer.from(pdfBytes),
+      body: bufferStream,
     };
 
     const uploadResponse = await drive.files.create({
