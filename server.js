@@ -311,7 +311,11 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
     // 1. Download template PDF from Google Drive
     console.log('Downloading template PDF...');
     const templateResponse = await drive.files.get(
-      { fileId: templateId, alt: 'media' },
+      { 
+        fileId: templateId, 
+        alt: 'media',
+        supportsAllDrives: true, // Required for shared drives
+      },
       { responseType: 'arraybuffer' }
     );
     const templateBytes = new Uint8Array(templateResponse.data);
@@ -422,11 +426,13 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
     console.log(`Target folder ID: ${folderId}`);
     
     // Try to verify folder exists (optional - don't fail if verification fails)
+    // Note: For shared drives, we need to include supportsAllDrives parameter
     if (folderId) {
       try {
         const folderInfo = await drive.files.get({
           fileId: folderId,
           fields: 'id, name, mimeType',
+          supportsAllDrives: true, // Required for shared drives
         });
         console.log(`Folder verified: ${folderInfo.data.name} (${folderInfo.data.mimeType})`);
       } catch (folderError) {
@@ -455,11 +461,12 @@ app.post('/fill', authenticateBearerToken, async (req, res) => {
         requestBody: fileMetadata,
         media: media,
         fields: 'id, name, webViewLink',
+        supportsAllDrives: true, // Required for shared drives
       });
     } catch (uploadError) {
       console.error(`Upload failed: ${uploadError.message}`);
       if (uploadError.message && uploadError.message.includes('File not found')) {
-        throw new Error(`Folder not found or no access: ${folderId}. Please ensure the service account (${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'pdf-filler-sa@pdf-autofill-472800.iam.gserviceaccount.com'}) has "Editor" access to this folder.`);
+        throw new Error(`Folder not found or no access: ${folderId}. Please ensure the service account (${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'pdf-filler-sa@pdf-autofill-472800.iam.gserviceaccount.com'}) has "Editor" or "Content manager" access to this folder. If this is a shared drive, ensure the service account has access to the shared drive.`);
       }
       throw uploadError;
     }
