@@ -1,4 +1,3 @@
-//test
 import express from 'express';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
@@ -17,7 +16,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
+const HOST = '0.0.0.0'; // Cloud Run requires binding to 0.0.0.0
 
 // JSON body parser (limit 20mb for large PDFs)
 app.use(express.json({ limit: '20mb' }));
@@ -516,8 +516,8 @@ async function startServer() {
     await loadFonts();
     await initializeDrive();
     
-    app.listen(PORT, () => {
-      console.log(`PDF filler service running on port ${PORT}`);
+    app.listen(PORT, HOST, () => {
+      console.log(`PDF filler service running on ${HOST}:${PORT}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
@@ -526,4 +526,3 @@ async function startServer() {
 }
 
 startServer();
-
