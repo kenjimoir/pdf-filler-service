@@ -1,0 +1,5 @@
+steps:
+- name: 'gcr.io/k8s-skaffold/pack'
+  args: ['build', '$_IMAGE', '--builder', 'gcr.io/buildpacks/builder']
+options:
+  logging: CLOUD_LOGGING_ONLY
